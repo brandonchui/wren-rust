@@ -27,6 +27,13 @@ fn parse_args(args: &[String]) -> Command {
 fn run_file(s: &str) {
     //TODO
     println!("Running {s}");
+
+    let scan = Scanner(s);
+    let tokens = scan.collect::<Vec<Token>>();
+
+    for token in &tokens {
+        println!("{token}");
+    }
 }
 
 fn run_prompt() {
