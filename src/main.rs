@@ -1,3 +1,12 @@
+use crate::wren::Wren;
+
+mod ast;
+mod codegen;
+mod parser;
+mod scanner;
+mod token;
+mod wren;
+
 enum Command {
     Repl,
     RunFile(String),
@@ -7,9 +16,11 @@ enum Command {
 fn main() {
     let args = std::env::args().collect::<Vec<String>>();
 
+    let mut wren = Wren::new();
+
     match parse_args(&args) {
         Command::Repl => run_prompt(),
-        Command::RunFile(path) => run_file(&path),
+        Command::RunFile(path) => wren.run_file(&path),
         Command::Usage => println!("Usage: wren [script]"),
     }
 }
@@ -24,18 +35,7 @@ fn parse_args(args: &[String]) -> Command {
     }
 }
 
-fn run_file(s: &str) {
-    //TODO
-    println!("Running {s}");
-
-    let scan = Scanner(s);
-    let tokens = scan.collect::<Vec<Token>>();
-
-    for token in &tokens {
-        println!("{token}");
-    }
-}
-
+// Probably does not make sense currently to implment a REPL for this compiler project.
 fn run_prompt() {
     //TODO
 }
