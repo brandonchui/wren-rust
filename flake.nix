@@ -14,6 +14,7 @@
             rustc
             cargo
             rust-analyzer
+            clippy
             llvmPackages_20.llvm
             libffi
             libxml2
