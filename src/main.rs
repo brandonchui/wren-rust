@@ -1,3 +1,5 @@
+use clap::{Parser, arg};
+
 use crate::wren::Wren;
 
 mod ast;
@@ -7,37 +9,29 @@ mod scanner;
 mod token;
 mod wren;
 
-enum Command {
-    Repl,
-    RunFile(String),
-    Usage,
+#[derive(Parser, Debug)]
+struct Args {
+    file: String,
+
+    #[arg(long)]
+    ast: bool,
 }
 
 fn main() {
-    let args = std::env::args().collect::<Vec<String>>();
+    let args = Args::parse();
 
     let mut wren = Wren::new();
 
-    match parse_args(&args) {
-        Command::Repl => run_prompt(),
-        Command::RunFile(path) => wren.run_file(&path),
-        Command::Usage => println!("Usage: wren [script]"),
-    }
-}
+    let source = std::fs::read_to_string(args.file);
 
-fn parse_args(args: &[String]) -> Command {
-    if args.len() > 2 {
-        Command::Usage
-    } else if args.len() == 1 {
-        Command::Repl
-    } else {
-        Command::RunFile(args[1].clone())
+    if args.ast {
+        wren.debug = true;
     }
-}
 
-// Probably does not make sense currently to implment a REPL for this compiler project.
-fn run_prompt() {
-    //TODO
+    match source {
+        Ok(src) => wren.run_file(&src),
+        Err(_) => panic!("File error."),
+    }
 }
 
 #[cfg(test)]
@@ -45,20 +39,35 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_no_args_runs_repl() {
-        let args = vec!["wren".to_string()];
-        assert!(matches!(parse_args(&args), Command::Repl));
+    fn test_args_parse_file_only() {
+        let args = Args::try_parse_from(["wren", "script.wren"]).unwrap();
+        assert_eq!(args.file, "script.wren");
+        assert!(!args.ast);
     }
 
     #[test]
-    fn test_one_arg_runs_file() {
-        let args = vec!["wren".to_string(), "script.wren".to_string()];
-        assert!(matches!(parse_args(&args), Command::RunFile(_)));
+    fn test_args_parse_with_ast_flag() {
+        let args = Args::try_parse_from(["wren", "script.wren", "--ast"]).unwrap();
+        assert_eq!(args.file, "script.wren");
+        assert!(args.ast);
     }
 
     #[test]
-    fn test_too_many_args_shows_usage() {
-        let args = vec!["wren".to_string(), "a".to_string(), "b".to_string()];
-        assert!(matches!(parse_args(&args), Command::Usage));
+    fn test_args_parse_ast_flag_before_file() {
+        let args = Args::try_parse_from(["wren", "--ast", "script.wren"]).unwrap();
+        assert_eq!(args.file, "script.wren");
+        assert!(args.ast);
+    }
+
+    #[test]
+    fn test_args_parse_missing_file_fails() {
+        let result = Args::try_parse_from(["wren"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_args_parse_unknown_flag_fails() {
+        let result = Args::try_parse_from(["wren", "script.wren", "--unknown"]);
+        assert!(result.is_err());
     }
 }
