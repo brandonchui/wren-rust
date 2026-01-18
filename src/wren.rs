@@ -1,12 +1,18 @@
-use crate::scanner::Scanner;
+use inkwell::context::Context;
+
+use crate::{codegen::CodeGen, parser::Parser, scanner::Scanner};
 
 pub struct Wren {
     pub had_error: bool,
+    pub debug: bool,
 }
 
 impl Wren {
     pub fn new() -> Self {
-        Wren { had_error: false }
+        Wren {
+            had_error: false,
+            debug: false,
+        }
     }
     pub fn report(&mut self, line: u32, loc: String, msg: String) {
         println!("[line {} Error {}: {}]", line, loc, msg);
@@ -18,7 +24,7 @@ impl Wren {
     }
 
     pub fn run_file(&mut self, s: &str) {
-        println!("Running {s}");
+        // println!("Running {s}");
 
         if self.had_error {
             //TODO error code?
@@ -36,8 +42,26 @@ impl Wren {
         }
         let tokens = scan.tokens;
 
-        for token in &tokens {
-            println!("{token}");
+        let mut parser = Parser::new(tokens);
+
+        match parser.parse() {
+            Ok(expr) => {
+                if self.debug {
+                    println!("{}", expr);
+                }
+
+                // Generate IR
+                let context = Context::create();
+                let codegen = CodeGen::new(&context);
+
+                codegen.compile(&expr);
+                // codegen.print_ir();
+                let result = codegen.jit_run();
+                println!("Result: {}", result);
+            }
+            Err(e) => {
+                self.error(e.line, e.message);
+            }
         }
     }
 }
