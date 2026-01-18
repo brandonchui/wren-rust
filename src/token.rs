@@ -68,6 +68,7 @@ pub enum TokenType {
 }
 
 // Holds the actual value from the lexeme, which is usually just the text representation only.
+#[derive(Debug, Clone)]
 pub enum Literal {
     Number(f64),
     StringLit(String),
@@ -83,6 +84,7 @@ impl Display for Literal {
 }
 
 // Represents a single word, which holds some metadata on what the meaning behind the word consists of, which is generated from the Scanner.
+#[derive(Debug, Clone)]
 pub struct Token {
     pub kind: TokenType,
     pub lexeme: String,
