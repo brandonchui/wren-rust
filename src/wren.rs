@@ -47,15 +47,15 @@ impl Wren {
         match parser.parse() {
             Ok(expr) => {
                 if self.debug {
-                    println!("{}", expr);
+                    println!("{:?}", expr);
                 }
 
                 // Generate IR
                 let context = Context::create();
-                let codegen = CodeGen::new(&context);
+                let mut codegen = CodeGen::new(&context);
 
                 codegen.compile(&expr);
-                // codegen.print_ir();
+                codegen.print_ir();
                 let result = codegen.jit_run();
                 println!("Result: {}", result);
             }

@@ -1,5 +1,5 @@
 use crate::{
-    ast::Expr,
+    ast::{Expr, Stmt},
     token::{Literal, Token, TokenType},
 };
 
@@ -33,14 +33,64 @@ impl Parser {
         Parser { tokens, current: 0 }
     }
 
-    pub fn parse(&mut self) -> Result<Expr, ParseError> {
-        match self.expression() {
-            Ok(expr) => Ok(expr),
-            Err(e) => Err(ParseError {
-                message: e.message,
-                line: e.line,
-            }),
+    pub fn parse(&mut self) -> Result<Vec<Stmt>, ParseError> {
+        // match self.expression() {
+        //     Ok(expr) => Ok(expr),
+        //     Err(e) => Err(ParseError {
+        //         message: e.message,
+        //         line: e.line,
+        //     }),
+        // }
+        let mut statements = Vec::<Stmt>::new();
+
+        while !self.is_at_end() {
+            statements.push(self.declaration()?);
         }
+
+        Ok(statements)
+    }
+    // Declaration
+    fn declaration(&mut self) -> Result<Stmt, ParseError> {
+        if self.match_token_kind(TokenType::Var) {
+            return self.var_declaration();
+        } else {
+            return self.statement();
+        }
+
+        // Error check
+        // ParseError{
+        // self.synchronize();
+        // ...}
+    }
+
+    fn var_declaration(&mut self) -> Result<Stmt, ParseError> {
+        let token_name = self
+            .consume(TokenType::Identifier, "Expect variable name.")?
+            .clone();
+
+        self.consume(TokenType::Equal, "")?;
+
+        let var_expr = self.expression()?;
+
+        // BUG Right now, we are requiring initialization when creating variables.
+
+        Ok(Stmt::Var {
+            name: token_name,
+            initializer: Box::new(var_expr),
+        })
+    }
+
+    // Statements
+    fn statement(&mut self) -> Result<Stmt, ParseError> {
+        self.expression_statement()
+    }
+
+    fn expression_statement(&mut self) -> Result<Stmt, ParseError> {
+        let expr = self.expression()?;
+
+        Ok(Stmt::Expression {
+            expression: Box::new(expr),
+        })
     }
 
     // Expression
@@ -169,6 +219,12 @@ impl Parser {
 
             return Ok(Expr::Grouping {
                 expression: Box::new(expr),
+            });
+        }
+
+        if self.match_token_kind(TokenType::Identifier) {
+            return Ok(Expr::Variable {
+                name: self.previous().clone(),
             });
         }
 

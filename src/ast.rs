@@ -20,6 +20,9 @@ pub enum Expr {
     Grouping {
         expression: Box<Expr>,
     },
+    Variable {
+        name: Token,
+    },
 }
 
 impl Display for Expr {
@@ -41,10 +44,21 @@ impl Display for Expr {
             Expr::Grouping { expression } => {
                 write!(f, "(group {})", expression)
             }
+            Expr::Variable { name } => {
+                write!(f, "(var {})", name)
+            }
         }
     }
 }
 
+// Statements
+#[derive(Debug)]
+pub enum Stmt {
+    Expression { expression: Box<Expr> },
+    Var { name: Token, initializer: Box<Expr> },
+}
+
+// Tests
 #[cfg(test)]
 mod tests {
     use super::*;
