@@ -15,7 +15,7 @@ pub struct CodeGen<'ctx> {
     pub module: Module<'ctx>,
     pub builder: Builder<'ctx>,
     // pub execution_engine: ExecutionEngine<'ctx>,
-    pub variables: HashMap<String, PointerValue<'ctx>>,
+    pub scopes: Vec<HashMap<String, PointerValue<'ctx>>>,
 }
 
 impl<'ctx> CodeGen<'ctx> {
@@ -24,8 +24,7 @@ impl<'ctx> CodeGen<'ctx> {
             context,
             module: context.create_module("main"),
             builder: context.create_builder(),
-            variables: HashMap::<String, PointerValue<'ctx>>::new(),
-            // execution_engine: todo!(),
+            scopes: vec![HashMap::new()], // execution_engine: todo!(),
         }
     }
 
@@ -88,24 +87,20 @@ impl<'ctx> CodeGen<'ctx> {
             }
             Expr::Variable { name } => {
                 // Stores
-                match self.variables.get(&name.lexeme) {
-                    Some(p) => self
-                        .builder
-                        .build_load(self.context.f64_type(), *p, &name.lexeme)
-                        .unwrap()
-                        .into_float_value(),
-                    None => todo!(),
-                }
+                let p = self.lookup_variable(&name.lexeme);
+                self.builder
+                    .build_load(self.context.f64_type(), p, &name.lexeme)
+                    .unwrap()
+                    .into_float_value()
             }
-            Expr::Assign { name, value } => match self.variables.get(&name.lexeme).copied() {
-                Some(p) => {
-                    let rhs = self.codegen_expr(value);
+            Expr::Assign { name, value } => {
+                let p = self.lookup_variable(&name.lexeme);
 
-                    self.builder.build_store(p, rhs).unwrap();
-                    rhs
-                }
-                None => todo!(),
-            },
+                let rhs = self.codegen_expr(value);
+
+                self.builder.build_store(p, rhs).unwrap();
+                rhs
+            }
         }
     }
 
@@ -122,12 +117,23 @@ impl<'ctx> CodeGen<'ctx> {
                         let var_expr = self.codegen_expr(initializer);
 
                         self.builder.build_store(p, var_expr);
-                        self.variables.insert(name.lexeme.clone(), p);
+                        // self.scopes.insert(name.lexeme.clone(), p);
+                        self.declare_variable(&name.lexeme, p);
                     }
                     Err(_) => todo!(),
                 }
 
                 None
+            }
+            Stmt::Block { statements } => {
+                self.enter_scope();
+
+                let mut last_value = None;
+                for stmt in statements {
+                    last_value = self.codegen_stmt(stmt);
+                }
+                self.exit_scope();
+                last_value
             }
         }
     }
@@ -149,5 +155,40 @@ impl<'ctx> CodeGen<'ctx> {
                 .unwrap();
             func.call()
         }
+    }
+}
+
+// Block
+impl<'ctx> CodeGen<'ctx> {
+    pub fn enter_scope(&mut self) {
+        self.scopes
+            .push(HashMap::<String, PointerValue<'ctx>>::new());
+    }
+
+    pub fn exit_scope(&mut self) {
+        self.scopes.pop();
+    }
+
+    pub fn declare_variable(&mut self, name: &str, ptr: PointerValue<'ctx>) {
+        let top = self.scopes.last_mut();
+
+        match top {
+            Some(hm) => {
+                hm.insert(name.to_string(), ptr);
+            }
+            None => todo!(),
+        }
+    }
+
+    pub fn lookup_variable(&mut self, name: &str) -> PointerValue<'ctx> {
+        // Search in "module" in the local scope level space first,
+        // then tries to look in global if exist.
+        // So, the local shadows the outer scopes.
+        for map in self.scopes.iter().rev() {
+            if let Some(p) = map.get(name) {
+                return *p;
+            }
+        }
+        todo!()
     }
 }

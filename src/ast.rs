@@ -63,6 +63,7 @@ impl Display for Expr {
 pub enum Stmt {
     Expression { expression: Box<Expr> },
     Var { name: Token, initializer: Box<Expr> },
+    Block { statements: Vec<Stmt> },
 }
 
 // Tests
