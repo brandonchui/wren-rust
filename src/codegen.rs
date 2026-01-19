@@ -97,6 +97,15 @@ impl<'ctx> CodeGen<'ctx> {
                     None => todo!(),
                 }
             }
+            Expr::Assign { name, value } => match self.variables.get(&name.lexeme).copied() {
+                Some(p) => {
+                    let rhs = self.codegen_expr(value);
+
+                    self.builder.build_store(p, rhs).unwrap();
+                    rhs
+                }
+                None => todo!(),
+            },
         }
     }
 

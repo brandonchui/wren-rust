@@ -95,7 +95,35 @@ impl Parser {
 
     // Expression
     pub fn expression(&mut self) -> Result<Expr, ParseError> {
-        self.equality()
+        self.assignment()
+    }
+
+    // Assignment
+    pub fn assignment(&mut self) -> Result<Expr, ParseError> {
+        let left = self.equality()?;
+
+        // If the next token is `=`, then we recursively get the RHS.
+        if self.match_token_kind(TokenType::Equal) {
+            let equals_line = self.previous().line;
+            let right = self.assignment()?;
+
+            // If the LHS is indeed some variable, then just return the Expr::Assign, since
+            // only variables are able to be assigned. E.g. a = 5
+            match left {
+                Expr::Variable { name } => Ok(Expr::Assign {
+                    name,
+                    value: Box::new(right),
+                }),
+                _ => Err(ParseError {
+                    message: "Assignment Error.".to_string(),
+                    line: equals_line,
+                }),
+            }
+        } else {
+            // If not a variable, it is not an assignment so just return the LHS, for
+            // example, 5 = x is not valid since it is a literal.
+            Ok(left)
+        }
     }
 
     // Equality

@@ -23,6 +23,10 @@ pub enum Expr {
     Variable {
         name: Token,
     },
+    Assign {
+        name: Token,
+        value: Box<Expr>,
+    },
 }
 
 impl Display for Expr {
@@ -46,6 +50,9 @@ impl Display for Expr {
             }
             Expr::Variable { name } => {
                 write!(f, "(var {})", name)
+            }
+            Expr::Assign { name, value } => {
+                write!(f, "(assign {} {})", name, value)
             }
         }
     }
