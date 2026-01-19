@@ -1,6 +1,7 @@
 use std::any::Any;
 use std::collections::HashMap;
 
+use inkwell::FloatPredicate;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::execution_engine::ExecutionEngine;
@@ -101,6 +102,97 @@ impl<'ctx> CodeGen<'ctx> {
                 self.builder.build_store(p, rhs).unwrap();
                 rhs
             }
+            Expr::Logical {
+                left,
+                operator,
+                right,
+            } => {
+                // Short circuit ex.
+                // 1 && 0
+
+                let lhs_value = self.codegen_expr(left);
+                let zero = self.context.f64_type().const_float(0.0);
+
+                // Converting to an LLVM bool
+                let lhs_bool = self
+                    .builder
+                    .build_float_compare(FloatPredicate::ONE, lhs_value, zero, "left_bool")
+                    .unwrap();
+
+                // Creating labels for the various function/blocks in llvm
+                // For right now, we get the current block and function
+                let entry_block = self.builder.get_insert_block().unwrap();
+                let function = entry_block.get_parent().unwrap();
+
+                // and then create the empty blocks
+                let eval_right_block = self.context.append_basic_block(function, "eval_right");
+                let merge_block = self.context.append_basic_block(function, "merge");
+
+                // Depending on || or &&
+                let skip_value = match operator.kind {
+                    TokenType::AmpAmp => {
+                        // true? evaluate right
+                        // false? jump to merge
+                        self.builder.build_conditional_branch(
+                            lhs_bool,
+                            eval_right_block,
+                            merge_block,
+                        );
+                        self.context.bool_type().const_int(0, false)
+                    }
+                    TokenType::PipePipe => {
+                        // true? jump to merge
+                        // false? evaluate right
+                        self.builder.build_conditional_branch(
+                            lhs_bool,
+                            merge_block,
+                            eval_right_block,
+                        );
+                        self.context.bool_type().const_int(1, false)
+                    }
+                    _ => unreachable!(),
+                };
+
+                // Move the llvm builder to the eval_right_block position
+                self.builder.position_at_end(eval_right_block);
+
+                // RHS
+                let rhs_value = self.codegen_expr(right);
+                let rhs_bool = self
+                    .builder
+                    .build_float_compare(FloatPredicate::ONE, rhs_value, zero, "right_bool")
+                    .unwrap();
+
+                // Merge Block
+                self.builder.build_unconditional_branch(merge_block);
+
+                // ?
+                let eval_right_end_block = self.builder.get_insert_block().unwrap();
+
+                self.builder.position_at_end(merge_block);
+
+                // Phi node
+                // If came from entry_block, then use skip_value
+                // If came from eval_right_end_block, then use right_bool
+                let phi = self
+                    .builder
+                    .build_phi(self.context.bool_type(), "result")
+                    .unwrap();
+
+                phi.add_incoming(&[
+                    (&skip_value, entry_block),
+                    (&rhs_bool, eval_right_end_block),
+                ]);
+
+                // Converion to boolean to f64, then return
+                self.builder
+                    .build_unsigned_int_to_float(
+                        phi.as_basic_value().into_int_value(),
+                        self.context.f64_type(),
+                        "bool_to_f64",
+                    )
+                    .unwrap()
+            }
         }
     }
 
@@ -134,6 +226,55 @@ impl<'ctx> CodeGen<'ctx> {
                 }
                 self.exit_scope();
                 last_value
+            }
+            Stmt::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
+                let condition_value = self.codegen_expr(condition);
+                let zero = self.context.f64_type().const_float(0.0);
+
+                let condition_bool = self
+                    .builder
+                    .build_float_compare(FloatPredicate::ONE, condition_value, zero, "if_condition")
+                    .unwrap();
+
+                // Get functions and create blocks
+                let function = self
+                    .builder
+                    .get_insert_block()
+                    .unwrap()
+                    .get_parent()
+                    .unwrap();
+
+                let then_block = self.context.append_basic_block(function, "then");
+                let else_block = self.context.append_basic_block(function, "else");
+                let merge_block = self.context.append_basic_block(function, "merge");
+
+                self.builder
+                    .build_conditional_branch(condition_bool, then_block, else_block);
+
+                // Generate the then branch
+                self.builder.position_at_end(then_block);
+                self.codegen_stmt(then_branch);
+                self.builder.build_unconditional_branch(merge_block);
+
+                // Generate else branch
+                self.builder.position_at_end(else_block);
+                match else_branch {
+                    Some(else_stmt) => {
+                        self.codegen_stmt(else_stmt);
+                    }
+                    _ => (),
+                }
+
+                // Jump
+                self.builder.build_unconditional_branch(merge_block);
+
+                // Return
+                self.builder.position_at_end(merge_block);
+                None
             }
         }
     }
@@ -190,5 +331,201 @@ impl<'ctx> CodeGen<'ctx> {
             }
         }
         todo!()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use inkwell::context::Context;
+    use crate::parser::Parser;
+    use crate::scanner::Scanner;
+    use super::CodeGen;
+
+    fn run_code(source: &str) -> f64 {
+        let mut scanner = Scanner::new(source);
+        scanner.scan_tokens();
+        assert!(scanner.errors.is_empty(), "Scanner errors: {:?}", scanner.errors);
+
+        let mut parser = Parser::new(scanner.tokens);
+        let stmts = parser.parse().expect("Parser failed");
+
+        let context = Context::create();
+        let mut codegen = CodeGen::new(&context);
+        codegen.compile(&stmts);
+        codegen.jit_run()
+    }
+
+    // ==================== If Statement Tests ====================
+
+    #[test]
+    fn test_if_true_executes_then_branch() {
+        // if (1) then branch executes, result is from then
+        let result = run_code("var x = 0\nif (1) { x = 5 }\nx");
+        assert_eq!(result, 5.0);
+    }
+
+    #[test]
+    fn test_if_false_skips_then_branch() {
+        // if (0) then branch is skipped, x stays 0
+        let result = run_code("var x = 0\nif (0) { x = 5 }\nx");
+        assert_eq!(result, 0.0);
+    }
+
+    #[test]
+    fn test_if_else_true_condition() {
+        // if (1) takes then branch, not else
+        let result = run_code("var x = 0\nif (1) { x = 10 } else { x = 20 }\nx");
+        assert_eq!(result, 10.0);
+    }
+
+    #[test]
+    fn test_if_else_false_condition() {
+        // if (0) takes else branch
+        let result = run_code("var x = 0\nif (0) { x = 10 } else { x = 20 }\nx");
+        assert_eq!(result, 20.0);
+    }
+
+    #[test]
+    fn test_if_with_logical_and_condition() {
+        // if (1 && 1) should execute then
+        let result = run_code("var x = 0\nif (1 && 1) { x = 100 }\nx");
+        assert_eq!(result, 100.0);
+    }
+
+    #[test]
+    fn test_if_with_logical_and_false() {
+        // if (1 && 0) should skip then
+        let result = run_code("var x = 0\nif (1 && 0) { x = 100 }\nx");
+        assert_eq!(result, 0.0);
+    }
+
+    #[test]
+    fn test_if_with_logical_or_condition() {
+        // if (0 || 1) should execute then
+        let result = run_code("var x = 0\nif (0 || 1) { x = 50 }\nx");
+        assert_eq!(result, 50.0);
+    }
+
+    #[test]
+    fn test_if_with_logical_or_false() {
+        // if (0 || 0) should skip then
+        let result = run_code("var x = 0\nif (0 || 0) { x = 50 }\nx");
+        assert_eq!(result, 0.0);
+    }
+
+    #[test]
+    fn test_nested_if_statements() {
+        // Nested if: outer true, inner true
+        let result = run_code("var x = 0\nif (1) { if (1) { x = 42 } }\nx");
+        assert_eq!(result, 42.0);
+    }
+
+    #[test]
+    fn test_nested_if_outer_true_inner_false() {
+        // Nested if: outer true, inner false
+        let result = run_code("var x = 0\nif (1) { if (0) { x = 42 } else { x = 99 } }\nx");
+        assert_eq!(result, 99.0);
+    }
+
+    #[test]
+    fn test_nested_if_outer_false() {
+        // Nested if: outer false, inner never evaluated
+        let result = run_code("var x = 5\nif (0) { if (1) { x = 42 } }\nx");
+        assert_eq!(result, 5.0);
+    }
+
+    #[test]
+    fn test_if_with_block_scoping() {
+        // Variable declared in if block should shadow outer
+        // Note: need trailing expression since Stmt::If returns None
+        let result = run_code("var x = 1\nif (1) { var x = 100 }\n100");
+        assert_eq!(result, 100.0);
+    }
+
+    #[test]
+    fn test_if_block_scope_doesnt_leak() {
+        // Variable in if block shouldn't affect outer scope after
+        let result = run_code("var x = 1\nif (1) { var y = 100 }\nx");
+        assert_eq!(result, 1.0);
+    }
+
+    // ==================== Logical Operator Tests ====================
+
+    #[test]
+    fn test_logical_and_true_true() {
+        let result = run_code("1 && 1");
+        assert_eq!(result, 1.0);
+    }
+
+    #[test]
+    fn test_logical_and_true_false() {
+        let result = run_code("1 && 0");
+        assert_eq!(result, 0.0);
+    }
+
+    #[test]
+    fn test_logical_and_false_true() {
+        let result = run_code("0 && 1");
+        assert_eq!(result, 0.0);
+    }
+
+    #[test]
+    fn test_logical_and_false_false() {
+        let result = run_code("0 && 0");
+        assert_eq!(result, 0.0);
+    }
+
+    #[test]
+    fn test_logical_or_true_true() {
+        let result = run_code("1 || 1");
+        assert_eq!(result, 1.0);
+    }
+
+    #[test]
+    fn test_logical_or_true_false() {
+        let result = run_code("1 || 0");
+        assert_eq!(result, 1.0);
+    }
+
+    #[test]
+    fn test_logical_or_false_true() {
+        let result = run_code("0 || 1");
+        assert_eq!(result, 1.0);
+    }
+
+    #[test]
+    fn test_logical_or_false_false() {
+        let result = run_code("0 || 0");
+        assert_eq!(result, 0.0);
+    }
+
+    #[test]
+    fn test_logical_chained_and() {
+        // 1 && 1 && 1 = 1
+        let result = run_code("1 && 1 && 1");
+        assert_eq!(result, 1.0);
+    }
+
+    #[test]
+    fn test_logical_chained_or() {
+        // 0 || 0 || 1 = 1
+        let result = run_code("0 || 0 || 1");
+        assert_eq!(result, 1.0);
+    }
+
+    #[test]
+    fn test_logical_mixed_and_or() {
+        // 1 || 0 && 0 = 1 (and has higher precedence)
+        // Parsed as: 1 || (0 && 0) = 1 || 0 = 1
+        let result = run_code("1 || 0 && 0");
+        assert_eq!(result, 1.0);
+    }
+
+    #[test]
+    fn test_logical_mixed_and_or_2() {
+        // 0 && 1 || 1 = 1
+        // Parsed as: (0 && 1) || 1 = 0 || 1 = 1
+        let result = run_code("0 && 1 || 1");
+        assert_eq!(result, 1.0);
     }
 }

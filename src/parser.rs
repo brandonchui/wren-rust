@@ -82,12 +82,36 @@ impl Parser {
 
     // Statements
     fn statement(&mut self) -> Result<Stmt, ParseError> {
+        if self.match_token_kind(TokenType::If) {
+            return self.if_statement();
+        }
+
         if self.match_token_kind(TokenType::LeftBrace) {
             return Ok(Stmt::Block {
                 statements: self.block(),
             });
         }
+
         self.expression_statement()
+    }
+
+    fn if_statement(&mut self) -> Result<Stmt, ParseError> {
+        self.consume(TokenType::LeftParen, "Expect '(' after 'if'.")?;
+        let condition = self.expression()?;
+        self.consume(TokenType::RightParen, "Expect ')' after if condition.")?;
+
+        let then_branch = self.statement()?;
+        let mut else_branch = None;
+
+        if self.match_token_kind(TokenType::Else) {
+            else_branch = Some(self.statement()?);
+        }
+
+        Ok(Stmt::If {
+            condition: Box::new(condition),
+            then_branch: Box::new(then_branch),
+            else_branch: else_branch.map(|s| Box::new(s)),
+        })
     }
 
     fn block(&mut self) -> Vec<Stmt> {
@@ -121,7 +145,8 @@ impl Parser {
 
     // Assignment
     pub fn assignment(&mut self) -> Result<Expr, ParseError> {
-        let left = self.equality()?;
+        // let left = self.equality()?;
+        let left = self.or()?;
 
         // If the next token is `=`, then we recursively get the RHS.
         if self.match_token_kind(TokenType::Equal) {
@@ -145,6 +170,40 @@ impl Parser {
             // example, 5 = x is not valid since it is a literal.
             Ok(left)
         }
+    }
+
+    // Logics
+    pub fn or(&mut self) -> Result<Expr, ParseError> {
+        let mut expr = self.and()?;
+
+        while self.match_token_kind(TokenType::PipePipe) {
+            let operator = self.previous().clone();
+            let right = self.and()?;
+
+            expr = Expr::Logical {
+                left: Box::new(expr),
+                operator,
+                right: Box::new(right),
+            }
+        }
+
+        Ok(expr)
+    }
+
+    pub fn and(&mut self) -> Result<Expr, ParseError> {
+        let mut expr = self.equality()?;
+
+        while self.match_token_kind(TokenType::AmpAmp) {
+            let operator = self.previous().clone();
+            let right = self.equality()?;
+
+            expr = Expr::Logical {
+                left: Box::new(expr),
+                operator,
+                right: Box::new(right),
+            }
+        }
+        Ok(expr)
     }
 
     // Equality
@@ -628,6 +687,7 @@ mod integration_tests {
     use crate::scanner::Scanner;
 
     // Helper to scan and parse source code, returning the AST string representation
+    // Assumes source is a single expression statement and formats the inner expression
     fn parse_source(source: &str) -> Result<String, ParseError> {
         let mut scanner = Scanner::new(source);
         scanner.scan_tokens();
@@ -641,8 +701,13 @@ mod integration_tests {
         }
 
         let mut parser = Parser::new(scanner.tokens);
-        let expr = parser.parse()?;
-        Ok(format!("{}", expr))
+        let stmts = parser.parse()?;
+
+        // Get first statement and extract the expression from it
+        match stmts.first() {
+            Some(Stmt::Expression { expression }) => Ok(format!("{}", expression)),
+            _ => Ok("(no expression)".to_string()),
+        }
     }
 
     #[test]

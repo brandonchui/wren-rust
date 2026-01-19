@@ -17,6 +17,11 @@ pub enum Expr {
         //TODO Confusing with the naming.
         value: Literal,
     },
+    Logical {
+        left: Box<Expr>,
+        operator: Token,
+        right: Box<Expr>,
+    },
     Grouping {
         expression: Box<Expr>,
     },
@@ -54,6 +59,11 @@ impl Display for Expr {
             Expr::Assign { name, value } => {
                 write!(f, "(assign {} {})", name, value)
             }
+            Expr::Logical {
+                left,
+                operator,
+                right,
+            } => todo!(),
         }
     }
 }
@@ -61,9 +71,21 @@ impl Display for Expr {
 // Statements
 #[derive(Debug)]
 pub enum Stmt {
-    Expression { expression: Box<Expr> },
-    Var { name: Token, initializer: Box<Expr> },
-    Block { statements: Vec<Stmt> },
+    Expression {
+        expression: Box<Expr>,
+    },
+    Var {
+        name: Token,
+        initializer: Box<Expr>,
+    },
+    Block {
+        statements: Vec<Stmt>,
+    },
+    If {
+        condition: Box<Expr>,
+        then_branch: Box<Stmt>,
+        else_branch: Option<Box<Stmt>>,
+    },
 }
 
 // Tests
