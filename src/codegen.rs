@@ -114,6 +114,7 @@ impl<'ctx> CodeGen<'ctx> {
                 let zero = self.context.f64_type().const_float(0.0);
 
                 // Converting to an LLVM bool
+                // An Order Not Equal operation to check if lhs != 0
                 let lhs_bool = self
                     .builder
                     .build_float_compare(FloatPredicate::ONE, lhs_value, zero, "left_bool")
@@ -276,6 +277,50 @@ impl<'ctx> CodeGen<'ctx> {
                 self.builder.position_at_end(merge_block);
                 None
             }
+            Stmt::While { condition, body } => {
+                let function = self
+                    .builder
+                    .get_insert_block()
+                    .unwrap()
+                    .get_parent()
+                    .unwrap();
+
+                let condition_block = self.context.append_basic_block(function, "condition");
+                let body_block = self.context.append_basic_block(function, "body");
+                let after_block = self.context.append_basic_block(function, "after");
+
+                // Need terminator for blocks in llvm
+                self.builder.build_unconditional_branch(condition_block);
+                self.builder.position_at_end(condition_block);
+
+                // Checking condition
+                let condition_value = self.codegen_expr(condition);
+
+                let zero = self.context.f64_type().const_float(0.0);
+
+                let condition_bool = self
+                    .builder
+                    .build_float_compare(
+                        FloatPredicate::ONE,
+                        condition_value,
+                        zero,
+                        "condition_bool",
+                    )
+                    .unwrap();
+
+                self.builder
+                    .build_conditional_branch(condition_bool, body_block, after_block);
+
+                // Body
+                self.builder.position_at_end(body_block);
+
+                self.codegen_stmt(body);
+                self.builder.build_unconditional_branch(condition_block);
+
+                // After
+                self.builder.position_at_end(after_block);
+                None
+            }
         }
     }
 
@@ -336,15 +381,19 @@ impl<'ctx> CodeGen<'ctx> {
 
 #[cfg(test)]
 mod tests {
-    use inkwell::context::Context;
+    use super::CodeGen;
     use crate::parser::Parser;
     use crate::scanner::Scanner;
-    use super::CodeGen;
+    use inkwell::context::Context;
 
     fn run_code(source: &str) -> f64 {
         let mut scanner = Scanner::new(source);
         scanner.scan_tokens();
-        assert!(scanner.errors.is_empty(), "Scanner errors: {:?}", scanner.errors);
+        assert!(
+            scanner.errors.is_empty(),
+            "Scanner errors: {:?}",
+            scanner.errors
+        );
 
         let mut parser = Parser::new(scanner.tokens);
         let stmts = parser.parse().expect("Parser failed");
@@ -527,5 +576,63 @@ mod tests {
         // Parsed as: (0 && 1) || 1 = 0 || 1 = 1
         let result = run_code("0 && 1 || 1");
         assert_eq!(result, 1.0);
+    }
+
+    // ==================== While Loop Tests ====================
+
+    #[test]
+    fn test_while_simple_countdown() {
+        // Count down from 3 to 0
+        let result = run_code("var x = 3\nwhile (x) { x = x - 1 }\nx");
+        assert_eq!(result, 0.0);
+    }
+
+    #[test]
+    fn test_while_false_condition_never_executes() {
+        // Body never runs because condition is false
+        let result = run_code("var x = 5\nwhile (0) { x = 100 }\nx");
+        assert_eq!(result, 5.0);
+    }
+
+    #[test]
+    fn test_while_accumulator() {
+        // Sum: 3 + 2 + 1 = 6
+        let result = run_code("var sum = 0\nvar i = 3\nwhile (i) { sum = sum + i\ni = i - 1 }\nsum");
+        assert_eq!(result, 6.0);
+    }
+
+    #[test]
+    fn test_while_single_iteration() {
+        // Runs once: x starts at 1 (truthy), sets x to 0, loop exits
+        let result = run_code("var x = 1\nwhile (x) { x = 0 }\nx");
+        assert_eq!(result, 0.0);
+    }
+
+    #[test]
+    fn test_while_with_block_body() {
+        // Multiple statements in body
+        let result = run_code("var x = 2\nvar y = 0\nwhile (x) { y = y + 1\nx = x - 1 }\ny");
+        assert_eq!(result, 2.0);
+    }
+
+    #[test]
+    fn test_while_nested() {
+        // Nested while loops: outer runs 2 times, inner runs 2 times each = 4 total increments
+        let result = run_code("var count = 0\nvar i = 2\nwhile (i) { var j = 2\nwhile (j) { count = count + 1\nj = j - 1 }\ni = i - 1 }\ncount");
+        assert_eq!(result, 4.0);
+    }
+
+    #[test]
+    fn test_while_modifies_outer_variable() {
+        // While loop modifies variable from outer scope
+        let result = run_code("var x = 0\nvar i = 3\nwhile (i) { x = x + 10\ni = i - 1 }\nx");
+        assert_eq!(result, 30.0);
+    }
+
+    #[test]
+    fn test_while_with_logical_condition() {
+        // Using && in condition
+        let result = run_code("var x = 3\nvar y = 1\nwhile (x && y) { x = x - 1\nif (x) { y = 1 } else { y = 0 } }\nx");
+        assert_eq!(result, 0.0);
     }
 }

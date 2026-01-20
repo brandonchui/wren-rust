@@ -86,6 +86,10 @@ impl Parser {
             return self.if_statement();
         }
 
+        if self.match_token_kind(TokenType::While) {
+            return self.while_statement();
+        }
+
         if self.match_token_kind(TokenType::LeftBrace) {
             return Ok(Stmt::Block {
                 statements: self.block(),
@@ -339,6 +343,20 @@ impl Parser {
         Err(ParseError {
             message: "Expect expression.".to_string(),
             line: self.peek().line,
+        })
+    }
+
+    fn while_statement(&mut self) -> Result<Stmt, ParseError> {
+        self.consume(TokenType::LeftParen, "Expect '(' after 'while'.");
+
+        let condition = self.expression()?;
+        self.consume(TokenType::RightParen, "Expect ')' after condition.");
+
+        let body = self.statement()?;
+
+        Ok(Stmt::While {
+            condition: Box::new(condition),
+            body: Box::new(body),
         })
     }
 }
