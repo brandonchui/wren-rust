@@ -68,6 +68,60 @@ impl<'ctx> CodeGen<'ctx> {
                     TokenType::Minus => self.builder.build_float_sub(l, r, "subtmp").unwrap(),
                     TokenType::Star => self.builder.build_float_mul(l, r, "multmp").unwrap(),
                     TokenType::Slash => self.builder.build_float_div(l, r, "divtmp").unwrap(),
+                    TokenType::Greater => {
+                        let val = self
+                            .builder
+                            .build_float_compare(FloatPredicate::OGT, l, r, "greater")
+                            .unwrap();
+                        self.builder
+                            .build_unsigned_int_to_float(val, self.context.f64_type(), "intToFloat")
+                            .unwrap()
+                    }
+                    TokenType::GreaterEqual => {
+                        let val = self
+                            .builder
+                            .build_float_compare(FloatPredicate::OGE, l, r, "greaterEq")
+                            .unwrap();
+                        self.builder
+                            .build_unsigned_int_to_float(val, self.context.f64_type(), "intToFloat")
+                            .unwrap()
+                    }
+                    TokenType::Less => {
+                        let val = self
+                            .builder
+                            .build_float_compare(FloatPredicate::OLT, l, r, "less")
+                            .unwrap();
+                        self.builder
+                            .build_unsigned_int_to_float(val, self.context.f64_type(), "intToFloat")
+                            .unwrap()
+                    }
+                    TokenType::LessEqual => {
+                        let val = self
+                            .builder
+                            .build_float_compare(FloatPredicate::OLE, l, r, "lessEq")
+                            .unwrap();
+                        self.builder
+                            .build_unsigned_int_to_float(val, self.context.f64_type(), "intToFloat")
+                            .unwrap()
+                    }
+                    TokenType::EqualEqual => {
+                        let val = self
+                            .builder
+                            .build_float_compare(FloatPredicate::OEQ, l, r, "equal")
+                            .unwrap();
+                        self.builder
+                            .build_unsigned_int_to_float(val, self.context.f64_type(), "intToFloat")
+                            .unwrap()
+                    }
+                    TokenType::BangEqual => {
+                        let val = self
+                            .builder
+                            .build_float_compare(FloatPredicate::ONE, l, r, "notEqual")
+                            .unwrap();
+                        self.builder
+                            .build_unsigned_int_to_float(val, self.context.f64_type(), "intToFloat")
+                            .unwrap()
+                    }
                     _ => todo!(),
                 }
             }
@@ -597,7 +651,8 @@ mod tests {
     #[test]
     fn test_while_accumulator() {
         // Sum: 3 + 2 + 1 = 6
-        let result = run_code("var sum = 0\nvar i = 3\nwhile (i) { sum = sum + i\ni = i - 1 }\nsum");
+        let result =
+            run_code("var sum = 0\nvar i = 3\nwhile (i) { sum = sum + i\ni = i - 1 }\nsum");
         assert_eq!(result, 6.0);
     }
 
@@ -618,7 +673,9 @@ mod tests {
     #[test]
     fn test_while_nested() {
         // Nested while loops: outer runs 2 times, inner runs 2 times each = 4 total increments
-        let result = run_code("var count = 0\nvar i = 2\nwhile (i) { var j = 2\nwhile (j) { count = count + 1\nj = j - 1 }\ni = i - 1 }\ncount");
+        let result = run_code(
+            "var count = 0\nvar i = 2\nwhile (i) { var j = 2\nwhile (j) { count = count + 1\nj = j - 1 }\ni = i - 1 }\ncount",
+        );
         assert_eq!(result, 4.0);
     }
 
@@ -632,7 +689,140 @@ mod tests {
     #[test]
     fn test_while_with_logical_condition() {
         // Using && in condition
-        let result = run_code("var x = 3\nvar y = 1\nwhile (x && y) { x = x - 1\nif (x) { y = 1 } else { y = 0 } }\nx");
+        let result = run_code(
+            "var x = 3\nvar y = 1\nwhile (x && y) { x = x - 1\nif (x) { y = 1 } else { y = 0 } }\nx",
+        );
         assert_eq!(result, 0.0);
+    }
+
+    // ==================== Comparison Operator Tests ====================
+
+    #[test]
+    fn test_greater_than_true() {
+        let result = run_code("5 > 3");
+        assert_eq!(result, 1.0);
+    }
+
+    #[test]
+    fn test_greater_than_false() {
+        let result = run_code("3 > 5");
+        assert_eq!(result, 0.0);
+    }
+
+    #[test]
+    fn test_greater_than_equal_false() {
+        let result = run_code("5 > 5");
+        assert_eq!(result, 0.0);
+    }
+
+    #[test]
+    fn test_greater_equal_true() {
+        let result = run_code("5 >= 5");
+        assert_eq!(result, 1.0);
+    }
+
+    #[test]
+    fn test_greater_equal_greater() {
+        let result = run_code("6 >= 5");
+        assert_eq!(result, 1.0);
+    }
+
+    #[test]
+    fn test_greater_equal_false() {
+        let result = run_code("4 >= 5");
+        assert_eq!(result, 0.0);
+    }
+
+    #[test]
+    fn test_less_than_true() {
+        let result = run_code("3 < 5");
+        assert_eq!(result, 1.0);
+    }
+
+    #[test]
+    fn test_less_than_false() {
+        let result = run_code("5 < 3");
+        assert_eq!(result, 0.0);
+    }
+
+    #[test]
+    fn test_less_than_equal_false() {
+        let result = run_code("5 < 5");
+        assert_eq!(result, 0.0);
+    }
+
+    #[test]
+    fn test_less_equal_true() {
+        let result = run_code("5 <= 5");
+        assert_eq!(result, 1.0);
+    }
+
+    #[test]
+    fn test_less_equal_less() {
+        let result = run_code("4 <= 5");
+        assert_eq!(result, 1.0);
+    }
+
+    #[test]
+    fn test_less_equal_false() {
+        let result = run_code("6 <= 5");
+        assert_eq!(result, 0.0);
+    }
+
+    #[test]
+    fn test_equal_equal_true() {
+        let result = run_code("5 == 5");
+        assert_eq!(result, 1.0);
+    }
+
+    #[test]
+    fn test_equal_equal_false() {
+        let result = run_code("5 == 3");
+        assert_eq!(result, 0.0);
+    }
+
+    #[test]
+    fn test_not_equal_true() {
+        let result = run_code("5 != 3");
+        assert_eq!(result, 1.0);
+    }
+
+    #[test]
+    fn test_not_equal_false() {
+        let result = run_code("5 != 5");
+        assert_eq!(result, 0.0);
+    }
+
+    #[test]
+    fn test_comparison_in_expression() {
+        // (5 > 3) + (2 < 4) = 1 + 1 = 2
+        let result = run_code("(5 > 3) + (2 < 4)");
+        assert_eq!(result, 2.0);
+    }
+
+    #[test]
+    fn test_comparison_with_variables() {
+        let result = run_code("var x = 10\nvar y = 5\nx > y");
+        assert_eq!(result, 1.0);
+    }
+
+    #[test]
+    fn test_comparison_in_if_condition() {
+        let result = run_code("var x = 0\nif (5 > 3) { x = 100 }\nx");
+        assert_eq!(result, 100.0);
+    }
+
+    #[test]
+    fn test_comparison_in_while_condition() {
+        // Count from 0 to 5
+        let result = run_code("var i = 0\nwhile (i < 5) { i = i + 1 }\ni");
+        assert_eq!(result, 5.0);
+    }
+
+    #[test]
+    fn test_comparison_chained_with_logical() {
+        // (5 > 3) && (2 < 4) = true && true = 1
+        let result = run_code("(5 > 3) && (2 < 4)");
+        assert_eq!(result, 1.0);
     }
 }
