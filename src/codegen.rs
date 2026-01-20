@@ -825,4 +825,63 @@ mod tests {
         let result = run_code("(5 > 3) && (2 < 4)");
         assert_eq!(result, 1.0);
     }
+
+    // ==================== For Loop Tests ====================
+
+    #[test]
+    fn test_for_loop_simple() {
+        // Sum 1..4 (1 + 2 + 3 = 6)
+        let result = run_code("var sum = 0\nfor (i in 1..4) { sum = sum + i }\nsum");
+        assert_eq!(result, 6.0);
+    }
+
+    #[test]
+    fn test_for_loop_single_iteration() {
+        // 1..2 means just i=1
+        let result = run_code("var x = 0\nfor (i in 1..2) { x = i }\nx");
+        assert_eq!(result, 1.0);
+    }
+
+    #[test]
+    fn test_for_loop_no_iteration() {
+        // 5..5 means no iterations (5 < 5 is false)
+        let result = run_code("var x = 99\nfor (i in 5..5) { x = 0 }\nx");
+        assert_eq!(result, 99.0);
+    }
+
+    #[test]
+    fn test_for_loop_accumulator() {
+        // Count iterations: 0..5 means 0,1,2,3,4 = 5 iterations
+        let result = run_code("var count = 0\nfor (i in 0..5) { count = count + 1 }\ncount");
+        assert_eq!(result, 5.0);
+    }
+
+    #[test]
+    fn test_for_loop_uses_loop_variable() {
+        // Last value of i should be 4 (loop runs while i < 5)
+        let result = run_code("var last = 0\nfor (i in 0..5) { last = i }\nlast");
+        assert_eq!(result, 4.0);
+    }
+
+    #[test]
+    fn test_for_loop_nested() {
+        // Outer 0..3, inner 0..3 = 3 * 3 = 9 iterations
+        let result = run_code("var count = 0\nfor (i in 0..3) { for (j in 0..3) { count = count + 1 } }\ncount");
+        assert_eq!(result, 9.0);
+    }
+
+    #[test]
+    fn test_for_loop_variable_scoped() {
+        // i should not leak outside the for loop
+        // After for loop, we access outer x which should still be 100
+        let result = run_code("var x = 100\nfor (i in 0..3) { var y = i }\nx");
+        assert_eq!(result, 100.0);
+    }
+
+    #[test]
+    fn test_for_loop_with_expressions() {
+        // Range bounds can be expressions
+        let result = run_code("var start = 1\nvar end = 4\nvar sum = 0\nfor (i in start..end) { sum = sum + i }\nsum");
+        assert_eq!(result, 6.0);
+    }
 }

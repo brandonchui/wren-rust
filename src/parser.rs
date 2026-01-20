@@ -82,6 +82,9 @@ impl Parser {
 
     // Statements
     fn statement(&mut self) -> Result<Stmt, ParseError> {
+        if self.match_token_kind(TokenType::For) {
+            return self.for_statement();
+        }
         if self.match_token_kind(TokenType::If) {
             return self.if_statement();
         }
@@ -357,6 +360,72 @@ impl Parser {
         Ok(Stmt::While {
             condition: Box::new(condition),
             body: Box::new(body),
+        })
+    }
+
+    fn for_statement(&mut self) -> Result<Stmt, ParseError> {
+        self.consume(TokenType::LeftParen, "Expect '(' after 'for'.");
+        // Parse ID
+        let loop_var = self
+            .consume(TokenType::Identifier, "Expect loop variable name")?
+            .clone();
+
+        self.consume(TokenType::In, "");
+        // Parse start expression literal
+        let start = self.expression()?;
+
+        self.consume(TokenType::DotDot, "");
+
+        // Parse second end expression literal
+        let end = self.expression()?;
+
+        self.consume(TokenType::RightParen, "Expect ')' after 'for'.");
+        let body = self.statement()?;
+
+        // Desugaring and using existing nodes
+
+        // Need to create the condition first (e.g. i < end)
+        let condition = Expr::Binary {
+            left: Box::new(Expr::Variable {
+                name: loop_var.clone(),
+            }),
+            operator: Token::new(TokenType::Less, "<".to_string(), None, loop_var.line),
+            right: Box::new(end),
+        };
+
+        let i_plus_one = Expr::Binary {
+            left: Box::new(Expr::Variable {
+                name: loop_var.clone(),
+            }),
+            operator: Token::new(TokenType::Plus, "+".to_string(), None, loop_var.line),
+            right: Box::new(Expr::Literal {
+                value: Literal::Number(1.0),
+            }),
+        };
+
+        let increment = Expr::Assign {
+            name: loop_var.clone(),
+            value: Box::new(i_plus_one),
+        };
+
+        Ok(Stmt::Block {
+            statements: vec![
+                Stmt::Var {
+                    name: loop_var.clone(),
+                    initializer: Box::new(start),
+                },
+                Stmt::While {
+                    condition: Box::new(condition),
+                    body: Box::new(Stmt::Block {
+                        statements: vec![
+                            body,
+                            Stmt::Expression {
+                                expression: Box::new(increment),
+                            },
+                        ],
+                    }),
+                },
+            ],
         })
     }
 }
