@@ -1,5 +1,5 @@
 use crate::{
-    ast::{Expr, Stmt},
+    ast::{Expr, Method, Stmt},
     token::{Literal, Token, TokenType},
 };
 
@@ -51,6 +51,9 @@ impl Parser {
     }
     // Declaration
     fn declaration(&mut self) -> Result<Stmt, ParseError> {
+        if self.match_token_kind(TokenType::Class) {
+            return self.class_declaration();
+        }
         if self.match_token_kind(TokenType::Var) {
             return self.var_declaration();
         } else {
@@ -427,6 +430,74 @@ impl Parser {
                 },
             ],
         })
+    }
+
+    fn class_declaration(&mut self) -> Result<Stmt, ParseError> {
+        let name = self
+            .consume(TokenType::Identifier, "Expect class name.")?
+            .clone();
+        self.consume(TokenType::LeftBrace, "Expect '{' before class body.")?;
+
+        let mut methods = Vec::<Method>::new();
+        let mut constructor: Option<Method> = None;
+
+        while !self.check(TokenType::RightBrace) && !self.is_at_end() {
+            // Constructor check first, else it is just a method
+            if self.match_token_kind(TokenType::Construct) {
+                constructor = Some(self.method()?);
+            } else {
+                methods.push(self.method()?);
+            }
+        }
+
+        self.consume(TokenType::RightBrace, "Expect '}' after class body.")?;
+
+        Ok(Stmt::Class {
+            name: name.clone(),
+            constructor,
+            methods,
+        })
+    }
+
+    fn method(&mut self) -> Result<Method, ParseError> {
+        // class Point {
+        //     construct new(x, y) {
+        //         _x = x
+        //         _y = y
+        //     }
+
+        //     getX() {
+        //         _x
+        //     }
+
+        //     add(other) {
+        //         _x + other.getX()
+        //     }
+        // }
+
+        let name = self.consume(TokenType::Identifier, "")?.clone();
+        self.consume(TokenType::LeftParen, "")?;
+
+        let mut params = Vec::<Token>::new();
+
+        while !self.check(TokenType::RightParen) {
+            // Parse first param
+            params.push(self.consume(TokenType::Identifier, "")?.clone());
+
+            // Check if there are more params, the comma seperates them
+            while self.match_token_kind(TokenType::Comma) {
+                params.push(self.consume(TokenType::Identifier, "")?.clone());
+            }
+        }
+
+        self.consume(TokenType::RightParen, "")?;
+        //Param end
+
+        // The curly and body
+        self.consume(TokenType::LeftBrace, "")?;
+        let body = self.block();
+
+        Ok(Method { name, params, body })
     }
 }
 

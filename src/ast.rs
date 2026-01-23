@@ -32,6 +32,21 @@ pub enum Expr {
         name: Token,
         value: Box<Expr>,
     },
+    // Class impl
+    Call {
+        receiver: Box<Expr>,
+        name: String,
+        arguments: Vec<Box<Expr>>,
+    },
+    Get {
+        object: Box<Expr>,
+        name: Token,
+    },
+    Set {
+        object: Box<Expr>,
+        name: Token,
+        value: Box<Expr>,
+    },
 }
 
 impl Display for Expr {
@@ -64,6 +79,17 @@ impl Display for Expr {
                 operator,
                 right,
             } => todo!(),
+            Expr::Call {
+                receiver,
+                name,
+                arguments,
+            } => todo!(),
+            Expr::Get { object, name } => todo!(),
+            Expr::Set {
+                object,
+                name,
+                value,
+            } => todo!(),
         }
     }
 }
@@ -90,6 +116,18 @@ pub enum Stmt {
         then_branch: Box<Stmt>,
         else_branch: Option<Box<Stmt>>,
     },
+    Class {
+        name: Token,
+        constructor: Option<Method>,
+        methods: Vec<Method>,
+    },
+}
+
+#[derive(Debug)]
+pub struct Method {
+    pub name: Token,
+    pub params: Vec<Token>,
+    pub body: Vec<Stmt>,
 }
 
 // Tests
