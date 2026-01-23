@@ -121,6 +121,9 @@ pub enum Stmt {
         constructor: Option<Method>,
         methods: Vec<Method>,
     },
+    Return {
+        value: Option<Box<Expr>>,
+    },
 }
 
 #[derive(Debug)]

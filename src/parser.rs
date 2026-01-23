@@ -85,6 +85,9 @@ impl Parser {
 
     // Statements
     fn statement(&mut self) -> Result<Stmt, ParseError> {
+        if self.match_token_kind(TokenType::Return) {
+            return self.return_statement();
+        }
         if self.match_token_kind(TokenType::For) {
             return self.for_statement();
         }
@@ -138,6 +141,16 @@ impl Parser {
 
         self.consume(TokenType::RightBrace, "Expect '}' after block.");
         statements
+    }
+
+    fn return_statement(&mut self) -> Result<Stmt, ParseError> {
+        if !self.check(TokenType::RightBrace) && !self.check(TokenType::RightParen) {
+            Ok(Stmt::Return {
+                value: Some(Box::new(self.expression()?)),
+            })
+        } else {
+            Ok(Stmt::Return { value: None })
+        }
     }
 
     fn expression_statement(&mut self) -> Result<Stmt, ParseError> {
@@ -303,7 +316,42 @@ impl Parser {
             });
         }
 
-        self.primary()
+        // self.primary()
+        self.call()
+    }
+
+    // Method call .
+    fn call(&mut self) -> Result<Expr, ParseError> {
+        let mut expr = self.primary()?;
+
+        while self.check(TokenType::Dot) {
+            self.consume(TokenType::Dot, "")?;
+            let name = self.consume(TokenType::Identifier, "")?.clone();
+
+            if self.match_token_kind(TokenType::LeftParen) {
+                let mut args = Vec::new();
+                if !self.check(TokenType::RightParen) {
+                    args.push(Box::new(self.expression()?));
+                    while self.match_token_kind(TokenType::Comma) {
+                        args.push(Box::new(self.expression()?));
+                    }
+                }
+                self.consume(TokenType::RightParen, "")?;
+
+                expr = Expr::Call {
+                    receiver: Box::new(expr),
+                    name: name.lexeme,
+                    arguments: args,
+                };
+            } else {
+                expr = Expr::Get {
+                    object: Box::new(expr),
+                    name,
+                };
+            }
+        }
+
+        Ok(expr)
     }
 
     // Primary
@@ -1094,5 +1142,552 @@ mod integration_tests {
         // Expected: (- (+ 3 (* 4 2)) (/ 10 5))
         // Because: * and / bind tighter than + and -, left associativity
         assert_eq!(result, "(- (+ 3 (* 4 2)) (/ 10 5))");
+    }
+}
+
+// ==================== Class Parsing Tests ====================
+#[cfg(test)]
+mod class_tests {
+    use super::*;
+    use crate::ast::{Method, Stmt};
+    use crate::scanner::Scanner;
+
+    // Helper to parse source and return statements
+    fn parse_statements(source: &str) -> Result<Vec<Stmt>, ParseError> {
+        let mut scanner = Scanner::new(source);
+        scanner.scan_tokens();
+
+        if !scanner.errors.is_empty() {
+            let (line, msg) = &scanner.errors[0];
+            return Err(ParseError {
+                message: msg.clone(),
+                line: *line,
+            });
+        }
+
+        let mut parser = Parser::new(scanner.tokens);
+        parser.parse()
+    }
+
+    // ==================== Class Declaration Tests ====================
+
+    #[test]
+    fn test_empty_class() {
+        let stmts = parse_statements("class Point {}").unwrap();
+        assert_eq!(stmts.len(), 1);
+
+        match &stmts[0] {
+            Stmt::Class {
+                name,
+                constructor,
+                methods,
+            } => {
+                assert_eq!(name.lexeme, "Point");
+                assert!(constructor.is_none());
+                assert!(methods.is_empty());
+            }
+            _ => panic!("Expected Stmt::Class"),
+        }
+    }
+
+    #[test]
+    fn test_class_with_constructor() {
+        let source = r#"
+            class Point {
+                construct new() {
+                }
+            }
+        "#;
+        let stmts = parse_statements(source).unwrap();
+        assert_eq!(stmts.len(), 1);
+
+        match &stmts[0] {
+            Stmt::Class {
+                name,
+                constructor,
+                methods,
+            } => {
+                assert_eq!(name.lexeme, "Point");
+                assert!(constructor.is_some());
+                let ctor = constructor.as_ref().unwrap();
+                assert_eq!(ctor.name.lexeme, "new");
+                assert!(ctor.params.is_empty());
+                assert!(methods.is_empty());
+            }
+            _ => panic!("Expected Stmt::Class"),
+        }
+    }
+
+    #[test]
+    fn test_class_with_constructor_params() {
+        let source = r#"
+            class Point {
+                construct new(x, y) {
+                }
+            }
+        "#;
+        let stmts = parse_statements(source).unwrap();
+
+        match &stmts[0] {
+            Stmt::Class { constructor, .. } => {
+                let ctor = constructor.as_ref().unwrap();
+                assert_eq!(ctor.name.lexeme, "new");
+                assert_eq!(ctor.params.len(), 2);
+                assert_eq!(ctor.params[0].lexeme, "x");
+                assert_eq!(ctor.params[1].lexeme, "y");
+            }
+            _ => panic!("Expected Stmt::Class"),
+        }
+    }
+
+    #[test]
+    fn test_class_with_method() {
+        let source = r#"
+            class Point {
+                getX() {
+                }
+            }
+        "#;
+        let stmts = parse_statements(source).unwrap();
+
+        match &stmts[0] {
+            Stmt::Class {
+                name,
+                constructor,
+                methods,
+            } => {
+                assert_eq!(name.lexeme, "Point");
+                assert!(constructor.is_none());
+                assert_eq!(methods.len(), 1);
+                assert_eq!(methods[0].name.lexeme, "getX");
+                assert!(methods[0].params.is_empty());
+            }
+            _ => panic!("Expected Stmt::Class"),
+        }
+    }
+
+    #[test]
+    fn test_class_with_method_params() {
+        let source = r#"
+            class Point {
+                add(other) {
+                }
+            }
+        "#;
+        let stmts = parse_statements(source).unwrap();
+
+        match &stmts[0] {
+            Stmt::Class { methods, .. } => {
+                assert_eq!(methods.len(), 1);
+                assert_eq!(methods[0].name.lexeme, "add");
+                assert_eq!(methods[0].params.len(), 1);
+                assert_eq!(methods[0].params[0].lexeme, "other");
+            }
+            _ => panic!("Expected Stmt::Class"),
+        }
+    }
+
+    #[test]
+    fn test_class_with_multiple_methods() {
+        let source = r#"
+            class Point {
+                getX() {
+                }
+                getY() {
+                }
+                add(other) {
+                }
+            }
+        "#;
+        let stmts = parse_statements(source).unwrap();
+
+        match &stmts[0] {
+            Stmt::Class { methods, .. } => {
+                assert_eq!(methods.len(), 3);
+                assert_eq!(methods[0].name.lexeme, "getX");
+                assert_eq!(methods[1].name.lexeme, "getY");
+                assert_eq!(methods[2].name.lexeme, "add");
+            }
+            _ => panic!("Expected Stmt::Class"),
+        }
+    }
+
+    #[test]
+    fn test_class_with_constructor_and_methods() {
+        let source = r#"
+            class Point {
+                construct new(x, y) {
+                }
+                getX() {
+                }
+                getY() {
+                }
+            }
+        "#;
+        let stmts = parse_statements(source).unwrap();
+
+        match &stmts[0] {
+            Stmt::Class {
+                name,
+                constructor,
+                methods,
+            } => {
+                assert_eq!(name.lexeme, "Point");
+                assert!(constructor.is_some());
+                assert_eq!(constructor.as_ref().unwrap().name.lexeme, "new");
+                assert_eq!(methods.len(), 2);
+            }
+            _ => panic!("Expected Stmt::Class"),
+        }
+    }
+
+    #[test]
+    fn test_class_method_with_body() {
+        let source = r#"
+            class Math {
+                add(a, b) {
+                    a + b
+                }
+            }
+        "#;
+        let stmts = parse_statements(source).unwrap();
+
+        match &stmts[0] {
+            Stmt::Class { methods, .. } => {
+                assert_eq!(methods.len(), 1);
+                assert_eq!(methods[0].name.lexeme, "add");
+                assert!(!methods[0].body.is_empty());
+            }
+            _ => panic!("Expected Stmt::Class"),
+        }
+    }
+
+    // ==================== Method Call Tests ====================
+
+    #[test]
+    fn test_simple_method_call() {
+        let stmts = parse_statements("point.getX()").unwrap();
+
+        match &stmts[0] {
+            Stmt::Expression { expression } => {
+                match expression.as_ref() {
+                    Expr::Call {
+                        receiver,
+                        name,
+                        arguments,
+                    } => {
+                        assert_eq!(name, "getX");
+                        assert!(arguments.is_empty());
+                        // receiver should be Variable "point"
+                        match receiver.as_ref() {
+                            Expr::Variable { name: var_name } => {
+                                assert_eq!(var_name.lexeme, "point");
+                            }
+                            _ => panic!("Expected Variable as receiver"),
+                        }
+                    }
+                    _ => panic!("Expected Expr::Call"),
+                }
+            }
+            _ => panic!("Expected Stmt::Expression"),
+        }
+    }
+
+    #[test]
+    fn test_method_call_with_argument() {
+        let stmts = parse_statements("point.add(other)").unwrap();
+
+        match &stmts[0] {
+            Stmt::Expression { expression } => match expression.as_ref() {
+                Expr::Call {
+                    name, arguments, ..
+                } => {
+                    assert_eq!(name, "add");
+                    assert_eq!(arguments.len(), 1);
+                }
+                _ => panic!("Expected Expr::Call"),
+            },
+            _ => panic!("Expected Stmt::Expression"),
+        }
+    }
+
+    #[test]
+    fn test_method_call_with_multiple_arguments() {
+        let stmts = parse_statements("obj.method(a, b, c)").unwrap();
+
+        match &stmts[0] {
+            Stmt::Expression { expression } => match expression.as_ref() {
+                Expr::Call {
+                    name, arguments, ..
+                } => {
+                    assert_eq!(name, "method");
+                    assert_eq!(arguments.len(), 3);
+                }
+                _ => panic!("Expected Expr::Call"),
+            },
+            _ => panic!("Expected Stmt::Expression"),
+        }
+    }
+
+    #[test]
+    fn test_method_call_with_expression_argument() {
+        let stmts = parse_statements("point.add(1 + 2)").unwrap();
+
+        match &stmts[0] {
+            Stmt::Expression { expression } => {
+                match expression.as_ref() {
+                    Expr::Call {
+                        name, arguments, ..
+                    } => {
+                        assert_eq!(name, "add");
+                        assert_eq!(arguments.len(), 1);
+                        // Argument should be a binary expression
+                        match arguments[0].as_ref() {
+                            Expr::Binary { .. } => {}
+                            _ => panic!("Expected Binary expression as argument"),
+                        }
+                    }
+                    _ => panic!("Expected Expr::Call"),
+                }
+            }
+            _ => panic!("Expected Stmt::Expression"),
+        }
+    }
+
+    #[test]
+    fn test_chained_method_calls() {
+        let stmts = parse_statements("a.b().c()").unwrap();
+
+        match &stmts[0] {
+            Stmt::Expression { expression } => {
+                match expression.as_ref() {
+                    Expr::Call { receiver, name, .. } => {
+                        assert_eq!(name, "c");
+                        // receiver should be another Call (a.b())
+                        match receiver.as_ref() {
+                            Expr::Call {
+                                name: inner_name, ..
+                            } => {
+                                assert_eq!(inner_name, "b");
+                            }
+                            _ => panic!("Expected nested Call"),
+                        }
+                    }
+                    _ => panic!("Expected Expr::Call"),
+                }
+            }
+            _ => panic!("Expected Stmt::Expression"),
+        }
+    }
+
+    #[test]
+    fn test_property_access() {
+        let stmts = parse_statements("point.x").unwrap();
+
+        match &stmts[0] {
+            Stmt::Expression { expression } => match expression.as_ref() {
+                Expr::Get { object, name } => {
+                    assert_eq!(name.lexeme, "x");
+                    match object.as_ref() {
+                        Expr::Variable { name: var_name } => {
+                            assert_eq!(var_name.lexeme, "point");
+                        }
+                        _ => panic!("Expected Variable as object"),
+                    }
+                }
+                _ => panic!("Expected Expr::Get"),
+            },
+            _ => panic!("Expected Stmt::Expression"),
+        }
+    }
+
+    #[test]
+    fn test_chained_property_access() {
+        let stmts = parse_statements("a.b.c").unwrap();
+
+        match &stmts[0] {
+            Stmt::Expression { expression } => {
+                match expression.as_ref() {
+                    Expr::Get { object, name } => {
+                        assert_eq!(name.lexeme, "c");
+                        // object should be Get (a.b)
+                        match object.as_ref() {
+                            Expr::Get {
+                                name: inner_name, ..
+                            } => {
+                                assert_eq!(inner_name.lexeme, "b");
+                            }
+                            _ => panic!("Expected nested Get"),
+                        }
+                    }
+                    _ => panic!("Expected Expr::Get"),
+                }
+            }
+            _ => panic!("Expected Stmt::Expression"),
+        }
+    }
+
+    #[test]
+    fn test_method_call_on_property() {
+        // a.b.method() - access property b, then call method
+        let stmts = parse_statements("a.b.method()").unwrap();
+
+        match &stmts[0] {
+            Stmt::Expression { expression } => {
+                match expression.as_ref() {
+                    Expr::Call { receiver, name, .. } => {
+                        assert_eq!(name, "method");
+                        // receiver should be Get (a.b)
+                        match receiver.as_ref() {
+                            Expr::Get {
+                                name: prop_name, ..
+                            } => {
+                                assert_eq!(prop_name.lexeme, "b");
+                            }
+                            _ => panic!("Expected Get as receiver"),
+                        }
+                    }
+                    _ => panic!("Expected Expr::Call"),
+                }
+            }
+            _ => panic!("Expected Stmt::Expression"),
+        }
+    }
+
+    #[test]
+    fn test_constructor_call_syntax() {
+        // Point.new(1, 2) - this looks like a method call on Point
+        let stmts = parse_statements("Point.new(1, 2)").unwrap();
+
+        match &stmts[0] {
+            Stmt::Expression { expression } => match expression.as_ref() {
+                Expr::Call {
+                    receiver,
+                    name,
+                    arguments,
+                } => {
+                    assert_eq!(name, "new");
+                    assert_eq!(arguments.len(), 2);
+                    match receiver.as_ref() {
+                        Expr::Variable { name: var_name } => {
+                            assert_eq!(var_name.lexeme, "Point");
+                        }
+                        _ => panic!("Expected Variable as receiver"),
+                    }
+                }
+                _ => panic!("Expected Expr::Call"),
+            },
+            _ => panic!("Expected Stmt::Expression"),
+        }
+    }
+
+    // ==================== Field Access Tests ====================
+
+    #[test]
+    fn test_underscore_field_as_variable() {
+        // _x is parsed as a regular variable (handled in codegen)
+        let stmts = parse_statements("_x").unwrap();
+
+        match &stmts[0] {
+            Stmt::Expression { expression } => match expression.as_ref() {
+                Expr::Variable { name } => {
+                    assert_eq!(name.lexeme, "_x");
+                }
+                _ => panic!("Expected Expr::Variable"),
+            },
+            _ => panic!("Expected Stmt::Expression"),
+        }
+    }
+
+    #[test]
+    fn test_underscore_field_assignment() {
+        // _x = 5 is parsed as regular assignment
+        let stmts = parse_statements("_x = 5").unwrap();
+
+        match &stmts[0] {
+            Stmt::Expression { expression } => match expression.as_ref() {
+                Expr::Assign { name, .. } => {
+                    assert_eq!(name.lexeme, "_x");
+                }
+                _ => panic!("Expected Expr::Assign"),
+            },
+            _ => panic!("Expected Stmt::Expression"),
+        }
+    }
+
+    // ==================== Complex Scenarios ====================
+
+    #[test]
+    fn test_class_followed_by_usage() {
+        let source = r#"
+            class Point {
+                construct new(x) {
+                }
+            }
+            Point.new(5)
+        "#;
+        let stmts = parse_statements(source).unwrap();
+        assert_eq!(stmts.len(), 2);
+
+        // First statement is class
+        match &stmts[0] {
+            Stmt::Class { name, .. } => {
+                assert_eq!(name.lexeme, "Point");
+            }
+            _ => panic!("Expected Stmt::Class"),
+        }
+
+        // Second statement is constructor call
+        match &stmts[1] {
+            Stmt::Expression { expression } => match expression.as_ref() {
+                Expr::Call { name, .. } => {
+                    assert_eq!(name, "new");
+                }
+                _ => panic!("Expected Expr::Call"),
+            },
+            _ => panic!("Expected Stmt::Expression"),
+        }
+    }
+
+    #[test]
+    fn test_method_call_in_expression() {
+        // 1 + point.getValue()
+        let stmts = parse_statements("1 + point.getValue()").unwrap();
+
+        match &stmts[0] {
+            Stmt::Expression { expression } => match expression.as_ref() {
+                Expr::Binary { right, .. } => match right.as_ref() {
+                    Expr::Call { name, .. } => {
+                        assert_eq!(name, "getValue");
+                    }
+                    _ => panic!("Expected Call on right side"),
+                },
+                _ => panic!("Expected Binary"),
+            },
+            _ => panic!("Expected Stmt::Expression"),
+        }
+    }
+
+    #[test]
+    fn test_var_with_constructor_call() {
+        let stmts = parse_statements("var p = Point.new(1, 2)").unwrap();
+
+        match &stmts[0] {
+            Stmt::Var { name, initializer } => {
+                assert_eq!(name.lexeme, "p");
+                match initializer.as_ref() {
+                    Expr::Call {
+                        name: method_name,
+                        arguments,
+                        ..
+                    } => {
+                        assert_eq!(method_name, "new");
+                        assert_eq!(arguments.len(), 2);
+                    }
+                    _ => panic!("Expected Call as initializer"),
+                }
+            }
+            _ => panic!("Expected Stmt::Var"),
+        }
     }
 }

@@ -1,14 +1,15 @@
 use std::any::Any;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
-use inkwell::FloatPredicate;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::execution_engine::ExecutionEngine;
 use inkwell::module::Module;
+use inkwell::types::{BasicMetadataTypeEnum, BasicType, BasicTypeEnum, StructType};
 use inkwell::values::{FloatValue, PointerValue};
+use inkwell::{AddressSpace, FloatPredicate};
 
-use crate::ast::{Expr, Stmt};
+use crate::ast::{Expr, Method, Stmt};
 use crate::token::TokenType;
 
 pub struct CodeGen<'ctx> {
@@ -17,6 +18,8 @@ pub struct CodeGen<'ctx> {
     pub builder: Builder<'ctx>,
     // pub execution_engine: ExecutionEngine<'ctx>,
     pub scopes: Vec<HashMap<String, PointerValue<'ctx>>>,
+    //Class
+    pub classes: HashMap<String, ClassInfo<'ctx>>,
 }
 
 impl<'ctx> CodeGen<'ctx> {
@@ -25,7 +28,8 @@ impl<'ctx> CodeGen<'ctx> {
             context,
             module: context.create_module("main"),
             builder: context.create_builder(),
-            scopes: vec![HashMap::new()], // execution_engine: todo!(),
+            scopes: vec![HashMap::new()],
+            classes: HashMap::<String, ClassInfo<'ctx>>::new(), // execution_engine: todo!(),
         }
     }
 
@@ -248,6 +252,9 @@ impl<'ctx> CodeGen<'ctx> {
                     )
                     .unwrap()
             }
+            Expr::Call { .. } => todo!("Call codegen not implemented"),
+            Expr::Get { .. } => todo!("Get codegen not implemented"),
+            Expr::Set { .. } => todo!("Set codegen not implemented"),
         }
     }
 
@@ -375,6 +382,145 @@ impl<'ctx> CodeGen<'ctx> {
                 self.builder.position_at_end(after_block);
                 None
             }
+            Stmt::Class {
+                name,
+                constructor,
+                methods,
+            } => {
+                let fields = Self::collect_fields(constructor, methods);
+                let mut hash = HashMap::<String, u32>::new();
+
+                for (i, field_name) in fields.iter().enumerate() {
+                    hash.insert(field_name.clone(), i as u32);
+                }
+
+                let f64_type = self.context.f64_type();
+                let field_types: Vec<BasicTypeEnum> =
+                    fields.iter().map(|_| f64_type.into()).collect();
+
+                let struct_type = self.context.struct_type(&field_types, false);
+
+                let saved_block = self.builder.get_insert_block();
+
+                if let Some(cons) = constructor {
+                    let return_ptr_type = struct_type.ptr_type(AddressSpace::default());
+                    let param_types_array: Vec<BasicMetadataTypeEnum> =
+                        cons.params.iter().map(|_| f64_type.into()).collect();
+
+                    let func_type = return_ptr_type.fn_type(&param_types_array, false);
+
+                    let func_name: String = format!("{}.new", name.lexeme);
+
+                    let func = self.module.add_function(&func_name, func_type, None);
+                    let basic_block = self.context.append_basic_block(func, "entry");
+                    self.builder.position_at_end(basic_block);
+
+                    // Constructor llvm
+                    self.enter_scope();
+                    for (i, param_token) in cons.params.iter().enumerate() {
+                        let param_value = func.get_params()[i].into_float_value();
+                        let ptr = self
+                            .builder
+                            .build_alloca(f64_type, &param_token.lexeme)
+                            .unwrap();
+
+                        self.builder.build_store(ptr, param_value);
+                        self.declare_variable(&param_token.lexeme, ptr);
+                    }
+                    let this_ptr = self.builder.build_alloca(struct_type, "this").unwrap();
+
+                    for (field_name, &index) in &hash {
+                        let field_ptr = self
+                            .builder
+                            .build_struct_gep(struct_type, this_ptr, index, field_name)
+                            .unwrap();
+                        self.declare_variable(field_name, field_ptr);
+                    }
+
+                    for body in &cons.body {
+                        self.codegen_stmt(body);
+                    }
+                    self.builder.build_return(Some(&this_ptr));
+                    self.exit_scope();
+                } else {
+                    todo!()
+                }
+
+                for method in methods {
+                    let this_param_type: BasicMetadataTypeEnum =
+                        struct_type.ptr_type(AddressSpace::default()).into();
+                    let mut param_types: Vec<BasicMetadataTypeEnum> = vec![this_param_type];
+                    for _ in &method.params {
+                        param_types.push(f64_type.into());
+                    }
+
+                    let func_type = f64_type.fn_type(&param_types, false);
+
+                    //"ClassName.methodName"
+                    let func_name = format!("{}.{}", name.lexeme, method.name.lexeme);
+
+                    let func = self.module.add_function(&func_name, func_type, None);
+                    let entry_block = self.context.append_basic_block(func, "entry");
+                    self.builder.position_at_end(entry_block);
+
+                    self.enter_scope();
+
+                    let this_ptr = func.get_params()[0].into_pointer_value();
+
+                    // GEPs to scope
+                    for (field_name, &index) in &hash {
+                        let field_ptr = self
+                            .builder
+                            .build_struct_gep(struct_type, this_ptr, index, field_name)
+                            .unwrap();
+                        self.declare_variable(field_name, field_ptr);
+                    }
+
+                    for (i, param_token) in method.params.iter().enumerate() {
+                        let param_value = func.get_params()[i + 1].into_float_value();
+                        let ptr = self
+                            .builder
+                            .build_alloca(f64_type, &param_token.lexeme)
+                            .unwrap();
+                        self.builder.build_store(ptr, param_value);
+                        self.declare_variable(&param_token.lexeme, ptr);
+                    }
+
+                    for stmt in &method.body {
+                        self.codegen_stmt(stmt);
+                    }
+
+                    self.exit_scope();
+                }
+
+                if let Some(block) = saved_block {
+                    self.builder.position_at_end(block);
+                }
+
+                let info = ClassInfo {
+                    struct_type,
+                    field_indices: hash,
+                };
+
+                self.classes.insert(name.lexeme.clone(), info);
+
+                None
+            }
+            Stmt::Return { value } => match value {
+                Some(v) => {
+                    let res = self.codegen_expr(v);
+                    match self.builder.build_return(Some(&res)) {
+                        Ok(_) => None,
+                        Err(_) => panic!("Return statement error."),
+                    }
+                }
+                None => {
+                    //TODO Probably should return a null rather than a 0.0f
+                    let res = self.context.f64_type().const_float(0.0);
+                    self.builder.build_return(Some(&res));
+                    None
+                }
+            },
         }
     }
 
@@ -394,6 +540,126 @@ impl<'ctx> CodeGen<'ctx> {
                 .get_function::<unsafe extern "C" fn() -> f64>("main")
                 .unwrap();
             func.call()
+        }
+    }
+
+    // Helpers
+    pub fn collect_fields(constructor: &Option<Method>, methods: &Vec<Method>) -> HashSet<String> {
+        let mut hash = HashSet::<String>::new();
+
+        if let Some(con) = constructor {
+            for c in &con.body {
+                Self::collect_fields_from_stmt(&c, &mut hash);
+            }
+        }
+
+        for body in methods {
+            for c in &body.body {
+                Self::collect_fields_from_stmt(&c, &mut hash);
+            }
+        }
+
+        hash
+    }
+
+    fn collect_fields_from_stmt(stmt: &Stmt, hash: &mut HashSet<String>) {
+        match stmt {
+            Stmt::Expression { expression } => {
+                Self::collect_fields_from_expr(expression, hash);
+            }
+            Stmt::Var { name, initializer } => {
+                Self::collect_fields_from_expr(initializer, hash);
+            }
+            Stmt::While { condition, body } => {
+                Self::collect_fields_from_expr(condition, hash);
+                Self::collect_fields_from_stmt(body, hash);
+            }
+            Stmt::Block { statements } => {
+                for statement in statements {
+                    Self::collect_fields_from_stmt(statement, hash);
+                }
+            }
+            Stmt::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
+                Self::collect_fields_from_expr(condition, hash);
+                Self::collect_fields_from_stmt(then_branch, hash);
+
+                match else_branch {
+                    Some(v) => {
+                        Self::collect_fields_from_stmt(v, hash);
+                    }
+                    None => {}
+                }
+            }
+            Stmt::Return { value } => match value {
+                Some(v) => {
+                    Self::collect_fields_from_expr(v, hash);
+                }
+                None => {}
+            },
+            _ => {}
+        }
+    }
+    fn collect_fields_from_expr(expr: &Expr, hash: &mut HashSet<String>) {
+        match expr {
+            Expr::Binary {
+                left,
+                operator,
+                right,
+            } => {
+                Self::collect_fields_from_expr(left, hash);
+                Self::collect_fields_from_expr(right, hash);
+            }
+            Expr::Unary { operator, right } => {
+                Self::collect_fields_from_expr(right, hash);
+            }
+            Expr::Logical {
+                left,
+                operator,
+                right,
+            } => {
+                Self::collect_fields_from_expr(left, hash);
+                Self::collect_fields_from_expr(right, hash);
+            }
+            Expr::Grouping { expression } => {
+                Self::collect_fields_from_expr(expression, hash);
+            }
+            Expr::Variable { name } => {
+                //Leaf node - nothing to do
+            }
+            Expr::Assign { name, value } => {
+                if name.lexeme.starts_with('_') {
+                    hash.insert(name.lexeme.clone());
+                }
+                Self::collect_fields_from_expr(value, hash);
+            }
+            Expr::Call {
+                receiver,
+                name,
+                arguments,
+            } => {
+                Self::collect_fields_from_expr(receiver, hash);
+                for args in arguments {
+                    Self::collect_fields_from_expr(args, hash);
+                }
+            }
+            Expr::Literal { value } => {
+                //Leaf node - nothing to do
+            }
+            Expr::Get { object, name } => {
+                Self::collect_fields_from_expr(object, hash);
+            }
+            Expr::Set {
+                object,
+                name,
+                value,
+            } => {
+                Self::collect_fields_from_expr(object, hash);
+                Self::collect_fields_from_expr(value, hash);
+            }
         }
     }
 }
@@ -431,6 +697,12 @@ impl<'ctx> CodeGen<'ctx> {
         }
         todo!()
     }
+}
+
+// Class data struct
+struct ClassInfo<'ctx> {
+    struct_type: StructType<'ctx>,
+    field_indices: HashMap<String, u32>,
 }
 
 #[cfg(test)]
@@ -866,7 +1138,9 @@ mod tests {
     #[test]
     fn test_for_loop_nested() {
         // Outer 0..3, inner 0..3 = 3 * 3 = 9 iterations
-        let result = run_code("var count = 0\nfor (i in 0..3) { for (j in 0..3) { count = count + 1 } }\ncount");
+        let result = run_code(
+            "var count = 0\nfor (i in 0..3) { for (j in 0..3) { count = count + 1 } }\ncount",
+        );
         assert_eq!(result, 9.0);
     }
 
@@ -881,7 +1155,9 @@ mod tests {
     #[test]
     fn test_for_loop_with_expressions() {
         // Range bounds can be expressions
-        let result = run_code("var start = 1\nvar end = 4\nvar sum = 0\nfor (i in start..end) { sum = sum + i }\nsum");
+        let result = run_code(
+            "var start = 1\nvar end = 4\nvar sum = 0\nfor (i in start..end) { sum = sum + i }\nsum",
+        );
         assert_eq!(result, 6.0);
     }
 }
