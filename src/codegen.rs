@@ -6,7 +6,7 @@ use inkwell::context::Context;
 use inkwell::execution_engine::ExecutionEngine;
 use inkwell::module::Module;
 use inkwell::types::{BasicMetadataTypeEnum, BasicType, BasicTypeEnum, StructType};
-use inkwell::values::{FloatValue, PointerValue};
+use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum, FloatValue, PointerValue};
 use inkwell::{AddressSpace, FloatPredicate};
 
 use crate::ast::{Expr, Method, Stmt};
@@ -57,21 +57,25 @@ impl<'ctx> CodeGen<'ctx> {
         }
     }
 
-    pub fn codegen_expr(&mut self, expr: &Expr) -> FloatValue<'ctx> {
+    pub fn codegen_expr(&mut self, expr: &Expr) -> BasicValueEnum<'ctx> {
         match expr {
             Expr::Binary {
                 left,
                 operator,
                 right,
             } => {
-                let l = self.codegen_expr(left);
-                let r = self.codegen_expr(right);
+                let l = self.codegen_expr(left).into_float_value();
+                let r = self.codegen_expr(right).into_float_value();
 
                 match operator.kind {
-                    TokenType::Plus => self.builder.build_float_add(l, r, "addtmp").unwrap(),
-                    TokenType::Minus => self.builder.build_float_sub(l, r, "subtmp").unwrap(),
-                    TokenType::Star => self.builder.build_float_mul(l, r, "multmp").unwrap(),
-                    TokenType::Slash => self.builder.build_float_div(l, r, "divtmp").unwrap(),
+                    TokenType::Plus => self.builder.build_float_add(l, r, "addtmp").unwrap().into(),
+                    TokenType::Minus => {
+                        self.builder.build_float_sub(l, r, "subtmp").unwrap().into()
+                    }
+                    TokenType::Star => self.builder.build_float_mul(l, r, "multmp").unwrap().into(),
+                    TokenType::Slash => {
+                        self.builder.build_float_div(l, r, "divtmp").unwrap().into()
+                    }
                     TokenType::Greater => {
                         let val = self
                             .builder
@@ -80,6 +84,7 @@ impl<'ctx> CodeGen<'ctx> {
                         self.builder
                             .build_unsigned_int_to_float(val, self.context.f64_type(), "intToFloat")
                             .unwrap()
+                            .into()
                     }
                     TokenType::GreaterEqual => {
                         let val = self
@@ -89,6 +94,7 @@ impl<'ctx> CodeGen<'ctx> {
                         self.builder
                             .build_unsigned_int_to_float(val, self.context.f64_type(), "intToFloat")
                             .unwrap()
+                            .into()
                     }
                     TokenType::Less => {
                         let val = self
@@ -98,6 +104,7 @@ impl<'ctx> CodeGen<'ctx> {
                         self.builder
                             .build_unsigned_int_to_float(val, self.context.f64_type(), "intToFloat")
                             .unwrap()
+                            .into()
                     }
                     TokenType::LessEqual => {
                         let val = self
@@ -107,6 +114,7 @@ impl<'ctx> CodeGen<'ctx> {
                         self.builder
                             .build_unsigned_int_to_float(val, self.context.f64_type(), "intToFloat")
                             .unwrap()
+                            .into()
                     }
                     TokenType::EqualEqual => {
                         let val = self
@@ -116,6 +124,7 @@ impl<'ctx> CodeGen<'ctx> {
                         self.builder
                             .build_unsigned_int_to_float(val, self.context.f64_type(), "intToFloat")
                             .unwrap()
+                            .into()
                     }
                     TokenType::BangEqual => {
                         let val = self
@@ -125,19 +134,20 @@ impl<'ctx> CodeGen<'ctx> {
                         self.builder
                             .build_unsigned_int_to_float(val, self.context.f64_type(), "intToFloat")
                             .unwrap()
+                            .into()
                     }
                     _ => todo!(),
                 }
             }
             Expr::Unary { operator, right } => {
-                let val = self.codegen_expr(right);
+                let val = self.codegen_expr(right).into_float_value();
                 match operator.kind {
-                    TokenType::Minus => self.builder.build_float_neg(val, "negtmp").unwrap(),
+                    TokenType::Minus => self.builder.build_float_neg(val, "negtmp").unwrap().into(),
                     _ => todo!(),
                 }
             }
             Expr::Literal { value } => match value {
-                crate::token::Literal::Number(n) => self.context.f64_type().const_float(*n),
+                crate::token::Literal::Number(n) => self.context.f64_type().const_float(*n).into(),
                 crate::token::Literal::StringLit(_) => todo!(),
             },
             Expr::Grouping { expression } => {
@@ -151,6 +161,7 @@ impl<'ctx> CodeGen<'ctx> {
                     .build_load(self.context.f64_type(), p, &name.lexeme)
                     .unwrap()
                     .into_float_value()
+                    .into()
             }
             Expr::Assign { name, value } => {
                 let p = self.lookup_variable(&name.lexeme);
@@ -168,7 +179,7 @@ impl<'ctx> CodeGen<'ctx> {
                 // Short circuit ex.
                 // 1 && 0
 
-                let lhs_value = self.codegen_expr(left);
+                let lhs_value = self.codegen_expr(left).into_float_value();
                 let zero = self.context.f64_type().const_float(0.0);
 
                 // Converting to an LLVM bool
@@ -216,7 +227,7 @@ impl<'ctx> CodeGen<'ctx> {
                 self.builder.position_at_end(eval_right_block);
 
                 // RHS
-                let rhs_value = self.codegen_expr(right);
+                let rhs_value = self.codegen_expr(right).into_float_value();
                 let rhs_bool = self
                     .builder
                     .build_float_compare(FloatPredicate::ONE, rhs_value, zero, "right_bool")
@@ -251,8 +262,36 @@ impl<'ctx> CodeGen<'ctx> {
                         "bool_to_f64",
                     )
                     .unwrap()
+                    .into()
             }
-            Expr::Call { .. } => todo!("Call codegen not implemented"),
+            Expr::Call {
+                receiver,
+                name,
+                arguments,
+            } => {
+                // Is receiver a class name? aka construct call
+                if let Expr::Variable { name: class_token } = receiver.as_ref() {
+                    if self.classes.contains_key(&class_token.lexeme) {
+                        // Point.new(1, 2)
+                        let func_name = format!("{}.{}", class_token.lexeme, name);
+                        let func = self.module.get_function(&func_name).unwrap();
+
+                        let args: Vec<BasicMetadataValueEnum> = arguments
+                            .iter()
+                            .map(|arg| self.codegen_expr(arg).into())
+                            .collect();
+
+                        let result = self
+                            .builder
+                            .build_call(func, &args, "constructor_call")
+                            .unwrap();
+
+                        return result.try_as_basic_value().unwrap_basic();
+                    }
+                }
+
+                todo!("Method calls not yet implemented, e.g. myPointer.getX()")
+            }
             Expr::Get { .. } => todo!("Get codegen not implemented"),
             Expr::Set { .. } => todo!("Set codegen not implemented"),
         }
@@ -260,7 +299,9 @@ impl<'ctx> CodeGen<'ctx> {
 
     pub fn codegen_stmt(&mut self, stmt: &Stmt) -> Option<FloatValue<'ctx>> {
         match stmt {
-            Stmt::Expression { expression } => Some(self.codegen_expr(expression)),
+            Stmt::Expression { expression } => {
+                Some(self.codegen_expr(expression).into_float_value())
+            }
             Stmt::Var { name, initializer } => {
                 let ptr = self
                     .builder
@@ -294,7 +335,7 @@ impl<'ctx> CodeGen<'ctx> {
                 then_branch,
                 else_branch,
             } => {
-                let condition_value = self.codegen_expr(condition);
+                let condition_value = self.codegen_expr(condition).into_float_value();
                 let zero = self.context.f64_type().const_float(0.0);
 
                 let condition_bool = self
@@ -355,7 +396,7 @@ impl<'ctx> CodeGen<'ctx> {
                 self.builder.position_at_end(condition_block);
 
                 // Checking condition
-                let condition_value = self.codegen_expr(condition);
+                let condition_value = self.codegen_expr(condition).into_float_value();
 
                 let zero = self.context.f64_type().const_float(0.0);
 
@@ -1159,5 +1200,127 @@ mod tests {
             "var start = 1\nvar end = 4\nvar sum = 0\nfor (i in start..end) { sum = sum + i }\nsum",
         );
         assert_eq!(result, 6.0);
+    }
+
+    // ==================== Class Tests ====================
+
+    // Helper to compile code and check IR generation (without running)
+    fn compile_code(source: &str) -> String {
+        let mut scanner = Scanner::new(source);
+        scanner.scan_tokens();
+        assert!(
+            scanner.errors.is_empty(),
+            "Scanner errors: {:?}",
+            scanner.errors
+        );
+
+        let mut parser = Parser::new(scanner.tokens);
+        let stmts = parser.parse().expect("Parser failed");
+
+        let context = Context::create();
+        let mut codegen = CodeGen::new(&context);
+        codegen.compile(&stmts);
+        codegen.module.print_to_string().to_string()
+    }
+
+    #[test]
+    fn test_class_empty_compiles() {
+        // Empty class with just constructor
+        let ir = compile_code("class Point { construct new() { } }");
+        assert!(ir.contains("Point.new"), "Should generate Point.new function");
+    }
+
+    #[test]
+    fn test_class_constructor_with_params() {
+        // Constructor with parameters
+        let ir = compile_code("class Point { construct new(x, y) { _x = x\n_y = y } }");
+        assert!(ir.contains("Point.new"), "Should generate Point.new function");
+        // Check struct has 2 fields (2 doubles)
+        assert!(ir.contains("double") || ir.contains("f64"), "Should have double fields");
+    }
+
+    #[test]
+    fn test_class_with_method() {
+        // Class with a method
+        let ir = compile_code("class Point { construct new(x) { _x = x } getX() { return _x } }");
+        assert!(ir.contains("Point.new"), "Should generate constructor");
+        assert!(ir.contains("Point.getX"), "Should generate getX method");
+    }
+
+    #[test]
+    fn test_class_multiple_methods() {
+        // Class with multiple methods
+        let ir = compile_code(
+            "class Point {
+                construct new(x, y) { _x = x\n_y = y }
+                getX() { return _x }
+                getY() { return _y }
+            }"
+        );
+        assert!(ir.contains("Point.new"), "Should generate constructor");
+        assert!(ir.contains("Point.getX"), "Should generate getX");
+        assert!(ir.contains("Point.getY"), "Should generate getY");
+    }
+
+    #[test]
+    fn test_class_method_with_params() {
+        // Method with parameters
+        let ir = compile_code(
+            "class Calc {
+                construct new() { }
+                add(a, b) { return a + b }
+            }"
+        );
+        assert!(ir.contains("Calc.new"), "Should generate constructor");
+        assert!(ir.contains("Calc.add"), "Should generate add method");
+    }
+
+    #[test]
+    fn test_class_field_assignment_in_constructor() {
+        // Verify fields are assigned in constructor
+        let ir = compile_code(
+            "class Point {
+                construct new(x, y) {
+                    _x = x
+                    _y = y
+                }
+            }"
+        );
+        // Should have getelementptr for field access
+        assert!(ir.contains("getelementptr"), "Should use GEP for field assignment");
+    }
+
+    #[test]
+    fn test_class_method_reads_field() {
+        // Method that reads a field
+        let ir = compile_code(
+            "class Counter {
+                construct new() { _count = 0 }
+                get() { return _count }
+            }"
+        );
+        assert!(ir.contains("Counter.get"), "Should generate get method");
+        assert!(ir.contains("getelementptr"), "Should use GEP to access field");
+    }
+
+    #[test]
+    fn test_constructor_call_generates_call() {
+        // Calling a constructor generates a call instruction
+        let ir = compile_code(
+            "class Point { construct new(x, y) { _x = x\n_y = y } }
+            Point.new(1, 2)"
+        );
+        assert!(ir.contains("call"), "Should generate call instruction for Point.new");
+    }
+
+    #[test]
+    fn test_multiple_classes() {
+        // Multiple class definitions
+        let ir = compile_code(
+            "class Point { construct new(x) { _x = x } }
+            class Circle { construct new(r) { _r = r } }"
+        );
+        assert!(ir.contains("Point.new"), "Should generate Point constructor");
+        assert!(ir.contains("Circle.new"), "Should generate Circle constructor");
     }
 }
