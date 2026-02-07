@@ -26,7 +26,7 @@ pub struct CodeGen<'ctx> {
     pub module: Module<'ctx>,
     pub builder: Builder<'ctx>,
     // pub execution_engine: ExecutionEngine<'ctx>,
-    pub scopes: Vec<HashMap<String, PointerValue<'ctx>>>,
+    pub scopes: Vec<HashMap<String, VarInfo<'ctx>>>,
     //Class
     pub classes: HashMap<String, ClassInfo<'ctx>>,
     // WrenValue - the 'var' type
@@ -91,29 +91,29 @@ impl<'ctx> CodeGen<'ctx> {
                 right,
             } => {
                 let left_val = self.codegen_expr(left);
-                let l = self.unwrap_number(left_val);
+                let l = self.unwrap_number(left_val.value);
                 let right_val = self.codegen_expr(right);
-                let r = self.unwrap_number(right_val);
+                let r = self.unwrap_number(right_val.value);
 
                 match operator.kind {
-                    TokenType::Plus => {
-                        self.wrap_number(self.builder.build_float_add(l, r, "addtmp").unwrap())
-                    }
-                    TokenType::Minus => {
-                        self.wrap_number(self.builder.build_float_sub(l, r, "subtmp").unwrap())
-                    }
-                    TokenType::Star => {
-                        self.wrap_number(self.builder.build_float_mul(l, r, "multmp").unwrap())
-                    }
-                    TokenType::Slash => {
-                        self.wrap_number(self.builder.build_float_div(l, r, "divtmp").unwrap())
-                    }
+                    TokenType::Plus => TypedValue::plain(
+                        self.wrap_number(self.builder.build_float_add(l, r, "addtmp").unwrap()),
+                    ),
+                    TokenType::Minus => TypedValue::plain(
+                        self.wrap_number(self.builder.build_float_sub(l, r, "subtmp").unwrap()),
+                    ),
+                    TokenType::Star => TypedValue::plain(
+                        self.wrap_number(self.builder.build_float_mul(l, r, "multmp").unwrap()),
+                    ),
+                    TokenType::Slash => TypedValue::plain(
+                        self.wrap_number(self.builder.build_float_div(l, r, "divtmp").unwrap()),
+                    ),
                     TokenType::Greater => {
                         let val = self
                             .builder
                             .build_float_compare(FloatPredicate::OGT, l, r, "greater")
                             .unwrap();
-                        self.wrap_number(
+                        TypedValue::plain(self.wrap_number(
                             self.builder
                                 .build_unsigned_int_to_float(
                                     val,
@@ -121,14 +121,14 @@ impl<'ctx> CodeGen<'ctx> {
                                     "intToFloat",
                                 )
                                 .unwrap(),
-                        )
+                        ))
                     }
                     TokenType::GreaterEqual => {
                         let val = self
                             .builder
                             .build_float_compare(FloatPredicate::OGE, l, r, "greaterEq")
                             .unwrap();
-                        self.wrap_number(
+                        TypedValue::plain(self.wrap_number(
                             self.builder
                                 .build_unsigned_int_to_float(
                                     val,
@@ -136,14 +136,14 @@ impl<'ctx> CodeGen<'ctx> {
                                     "intToFloat",
                                 )
                                 .unwrap(),
-                        )
+                        ))
                     }
                     TokenType::Less => {
                         let val = self
                             .builder
                             .build_float_compare(FloatPredicate::OLT, l, r, "less")
                             .unwrap();
-                        self.wrap_number(
+                        TypedValue::plain(self.wrap_number(
                             self.builder
                                 .build_unsigned_int_to_float(
                                     val,
@@ -151,14 +151,14 @@ impl<'ctx> CodeGen<'ctx> {
                                     "intToFloat",
                                 )
                                 .unwrap(),
-                        )
+                        ))
                     }
                     TokenType::LessEqual => {
                         let val = self
                             .builder
                             .build_float_compare(FloatPredicate::OLE, l, r, "lessEq")
                             .unwrap();
-                        self.wrap_number(
+                        TypedValue::plain(self.wrap_number(
                             self.builder
                                 .build_unsigned_int_to_float(
                                     val,
@@ -166,14 +166,14 @@ impl<'ctx> CodeGen<'ctx> {
                                     "intToFloat",
                                 )
                                 .unwrap(),
-                        )
+                        ))
                     }
                     TokenType::EqualEqual => {
                         let val = self
                             .builder
                             .build_float_compare(FloatPredicate::OEQ, l, r, "equal")
                             .unwrap();
-                        self.wrap_number(
+                        TypedValue::plain(self.wrap_number(
                             self.builder
                                 .build_unsigned_int_to_float(
                                     val,
@@ -181,14 +181,14 @@ impl<'ctx> CodeGen<'ctx> {
                                     "intToFloat",
                                 )
                                 .unwrap(),
-                        )
+                        ))
                     }
                     TokenType::BangEqual => {
                         let val = self
                             .builder
                             .build_float_compare(FloatPredicate::ONE, l, r, "notEqual")
                             .unwrap();
-                        self.wrap_number(
+                        TypedValue::plain(self.wrap_number(
                             self.builder
                                 .build_unsigned_int_to_float(
                                     val,
@@ -196,18 +196,18 @@ impl<'ctx> CodeGen<'ctx> {
                                     "intToFloat",
                                 )
                                 .unwrap(),
-                        )
+                        ))
                     }
                     _ => todo!(),
                 }
             }
             Expr::Unary { operator, right } => {
                 let v = self.codegen_expr(right);
-                let val = self.unwrap_number(v);
+                let val = self.unwrap_number(v.value);
                 match operator.kind {
-                    TokenType::Minus => {
-                        self.wrap_number(self.builder.build_float_neg(val, "negtmp").unwrap())
-                    }
+                    TokenType::Minus => TypedValue::plain(
+                        self.wrap_number(self.builder.build_float_neg(val, "negtmp").unwrap()),
+                    ),
                     _ => todo!(),
                 }
             }
@@ -226,7 +226,7 @@ impl<'ctx> CodeGen<'ctx> {
                         .wren_value
                         .const_named_struct(&[tag.into(), payload.into()]);
 
-                    struct_wren.into()
+                    TypedValue::plain(struct_wren.into())
                 }
                 crate::token::Literal::StringLit(_) => todo!(),
             },
@@ -235,19 +235,52 @@ impl<'ctx> CodeGen<'ctx> {
                 self.codegen_expr(expression)
             }
             Expr::Variable { name } => {
-                // Stores
-                let p = self.lookup_variable(&name.lexeme);
-                self.builder
-                    .build_load(self.wren_value, p, &name.lexeme)
-                    .unwrap()
-                    .into()
+                let info = self.lookup_variable(&name.lexeme);
+                let ptr = info.ptr;
+                let is_raw = info.is_raw_f64;
+                let cls = info.class_name.clone();
+
+                if is_raw {
+                    // Inside class method: load raw f64, wrap into wren_value
+                    let loaded = self
+                        .builder
+                        .build_load(self.context.f64_type(), ptr, &name.lexeme)
+                        .unwrap()
+                        .into_float_value();
+                    TypedValue::plain(self.wrap_number(loaded))
+                } else if let Some(cls_name) = cls {
+                    // Class instance variable
+                    let loaded = self
+                        .builder
+                        .build_load(self.wren_value, ptr, &name.lexeme)
+                        .unwrap();
+                    TypedValue {
+                        value: loaded,
+                        class_name: Some(cls_name),
+                    }
+                } else {
+                    // Regular wren_value variable
+                    let loaded = self
+                        .builder
+                        .build_load(self.wren_value, ptr, &name.lexeme)
+                        .unwrap();
+                    TypedValue::plain(loaded)
+                }
             }
             Expr::Assign { name, value } => {
-                let p = self.lookup_variable(&name.lexeme);
+                let info = self.lookup_variable(&name.lexeme);
+                let p = info.ptr;
+                let is_raw = info.is_raw_f64;
 
                 let rhs = self.codegen_expr(value);
 
-                self.builder.build_store(p, rhs).unwrap();
+                if is_raw {
+                    // Storing into raw f64 slot (class field/param)
+                    let num = self.unwrap_number(rhs.value);
+                    self.builder.build_store(p, num).unwrap();
+                } else {
+                    self.builder.build_store(p, rhs.value).unwrap();
+                }
                 rhs
             }
             Expr::Logical {
@@ -258,7 +291,7 @@ impl<'ctx> CodeGen<'ctx> {
                 // Short circuit ex.
                 // 1 && 0
                 let lhs = self.codegen_expr(left);
-                let lhs_value = self.unwrap_number(lhs);
+                let lhs_value = self.unwrap_number(lhs.value);
                 let zero = self.context.f64_type().const_float(0.0);
 
                 // Converting to an LLVM bool
@@ -307,7 +340,7 @@ impl<'ctx> CodeGen<'ctx> {
 
                 // RHS
                 let rhs = self.codegen_expr(right);
-                let rhs_value = self.unwrap_number(rhs);
+                let rhs_value = self.unwrap_number(rhs.value);
                 let rhs_bool = self
                     .builder
                     .build_float_compare(FloatPredicate::ONE, rhs_value, zero, "right_bool")
@@ -334,8 +367,8 @@ impl<'ctx> CodeGen<'ctx> {
                     (&rhs_bool, eval_right_end_block),
                 ]);
 
-                // Converion to boolean to f64, then return
-                self.wrap_number(
+                // Conversion to boolean to f64, then return
+                TypedValue::plain(self.wrap_number(
                     self.builder
                         .build_unsigned_int_to_float(
                             phi.as_basic_value().into_int_value(),
@@ -343,23 +376,27 @@ impl<'ctx> CodeGen<'ctx> {
                             "bool_to_f64",
                         )
                         .unwrap(),
-                )
+                ))
             }
             Expr::Call {
                 receiver,
                 name,
                 arguments,
             } => {
-                // Is receiver a class name? aka construct call
+                // 1. Constructor call: Point.new(1, 2)
                 if let Expr::Variable { name: class_token } = receiver.as_ref() {
                     if self.classes.contains_key(&class_token.lexeme) {
-                        // Point.new(1, 2)
                         let func_name = format!("{}.{}", class_token.lexeme, name);
                         let func = self.module.get_function(&func_name).unwrap();
 
+                        // Unwrap args from wren_value to raw f64 (constructor expects doubles)
                         let args: Vec<BasicMetadataValueEnum> = arguments
                             .iter()
-                            .map(|arg| self.codegen_expr(arg).into())
+                            .map(|arg| {
+                                let typed = self.codegen_expr(arg);
+                                let num = self.unwrap_number(typed.value);
+                                BasicMetadataValueEnum::from(num)
+                            })
                             .collect();
 
                         let result = self
@@ -371,13 +408,51 @@ impl<'ctx> CodeGen<'ctx> {
                             .try_as_basic_value()
                             .unwrap_basic()
                             .into_pointer_value();
-                        let class_id_get = *self.class_ids.get(&class_token.lexeme).unwrap();
+                        let class_id = *self.class_ids.get(&class_token.lexeme).unwrap();
 
-                        return self.wrap_object(ptr, class_id_get);
+                        // Wrap return pointer into wren_value with Object tag
+                        return TypedValue {
+                            value: self.wrap_object(ptr, class_id),
+                            class_name: Some(class_token.lexeme.clone()),
+                        };
                     }
                 }
 
-                todo!("Method calls not yet implemented, e.g. myPointer.getX()")
+                // 2. Instance method call: p.getX()
+                let receiver_typed = self.codegen_expr(receiver);
+
+                let class_name = receiver_typed
+                    .class_name
+                    .expect("Cannot call method on non-class value");
+
+                // Unwrap the receiver from wren_value to get raw struct pointer
+                let (this_ptr, _class_id) = self.unwrap_object(receiver_typed.value);
+
+                let func_name = format!("{}.{}", class_name, name);
+                let func = self
+                    .module
+                    .get_function(&func_name)
+                    .unwrap_or_else(|| panic!("Unknown method: {}", func_name));
+
+                // Build args: this pointer first, then unwrapped user arguments
+                let mut args: Vec<BasicMetadataValueEnum> = vec![this_ptr.into()];
+                for arg in arguments {
+                    let arg_typed = self.codegen_expr(arg);
+                    let num = self.unwrap_number(arg_typed.value);
+                    args.push(BasicMetadataValueEnum::from(num));
+                }
+
+                let result = self
+                    .builder
+                    .build_call(func, &args, "method_call")
+                    .unwrap();
+
+                // Wrap the raw f64 return value back into wren_value
+                let ret_float = result
+                    .try_as_basic_value()
+                    .unwrap_basic()
+                    .into_float_value();
+                TypedValue::plain(self.wrap_number(ret_float))
             }
             Expr::Get { .. } => todo!("Get codegen not implemented"),
             Expr::Set { .. } => todo!("Set codegen not implemented"),
@@ -388,7 +463,7 @@ impl<'ctx> CodeGen<'ctx> {
         match stmt {
             Stmt::Expression { expression } => {
                 let ex = self.codegen_expr(expression);
-                Some(self.unwrap_number(ex))
+                Some(self.unwrap_number(ex.value))
             }
             Stmt::Var { name, initializer } => {
                 let ptr = self.builder.build_alloca(self.wren_value, &name.lexeme);
@@ -397,9 +472,9 @@ impl<'ctx> CodeGen<'ctx> {
                     Ok(p) => {
                         let var_expr = self.codegen_expr(initializer);
 
-                        self.builder.build_store(p, var_expr);
-                        // self.scopes.insert(name.lexeme.clone(), p);
-                        self.declare_variable(&name.lexeme, p);
+                        self.builder.build_store(p, var_expr.value);
+                        let cls = var_expr.class_name.clone();
+                        self.declare_variable(&name.lexeme, p, cls, false);
                     }
                     Err(_) => todo!(),
                 }
@@ -422,7 +497,7 @@ impl<'ctx> CodeGen<'ctx> {
                 else_branch,
             } => {
                 let cond_expr = self.codegen_expr(condition);
-                let condition_value = self.unwrap_number(cond_expr);
+                let condition_value = self.unwrap_number(cond_expr.value);
                 let zero = self.context.f64_type().const_float(0.0);
 
                 let condition_bool = self
@@ -484,7 +559,7 @@ impl<'ctx> CodeGen<'ctx> {
 
                 // Checking condition
                 let cond_expr = self.codegen_expr(condition);
-                let condition_value = self.unwrap_number(cond_expr);
+                let condition_value = self.unwrap_number(cond_expr.value);
 
                 let zero = self.context.f64_type().const_float(0.0);
 
@@ -554,7 +629,7 @@ impl<'ctx> CodeGen<'ctx> {
                             .unwrap();
 
                         self.builder.build_store(ptr, param_value);
-                        self.declare_variable(&param_token.lexeme, ptr);
+                        self.declare_variable(&param_token.lexeme, ptr, None, true);
                     }
                     let this_ptr = self.builder.build_alloca(struct_type, "this").unwrap();
 
@@ -563,7 +638,7 @@ impl<'ctx> CodeGen<'ctx> {
                             .builder
                             .build_struct_gep(struct_type, this_ptr, index, field_name)
                             .unwrap();
-                        self.declare_variable(field_name, field_ptr);
+                        self.declare_variable(field_name, field_ptr, None, true);
                     }
 
                     for body in &cons.body {
@@ -602,7 +677,7 @@ impl<'ctx> CodeGen<'ctx> {
                             .builder
                             .build_struct_gep(struct_type, this_ptr, index, field_name)
                             .unwrap();
-                        self.declare_variable(field_name, field_ptr);
+                        self.declare_variable(field_name, field_ptr, None, true);
                     }
 
                     for (i, param_token) in method.params.iter().enumerate() {
@@ -612,7 +687,7 @@ impl<'ctx> CodeGen<'ctx> {
                             .build_alloca(f64_type, &param_token.lexeme)
                             .unwrap();
                         self.builder.build_store(ptr, param_value);
-                        self.declare_variable(&param_token.lexeme, ptr);
+                        self.declare_variable(&param_token.lexeme, ptr, None, true);
                     }
 
                     for stmt in &method.body {
@@ -643,13 +718,14 @@ impl<'ctx> CodeGen<'ctx> {
             Stmt::Return { value } => match value {
                 Some(v) => {
                     let res = self.codegen_expr(v);
-                    match self.builder.build_return(Some(&res)) {
+                    // Methods return raw f64, so unwrap
+                    let unwrapped = self.unwrap_number(res.value);
+                    match self.builder.build_return(Some(&unwrapped)) {
                         Ok(_) => None,
                         Err(_) => panic!("Return statement error."),
                     }
                 }
                 None => {
-                    //TODO Probably should return a null rather than a 0.0f
                     let res = self.context.f64_type().const_float(0.0);
                     self.builder.build_return(Some(&res));
                     None
@@ -906,12 +982,20 @@ impl<'ctx> CodeGen<'ctx> {
         name: &str,
         ptr: PointerValue<'ctx>,
         class_name: Option<String>,
+        is_raw_f64: bool,
     ) {
         let top = self.scopes.last_mut();
 
         match top {
             Some(hm) => {
-                hm.insert(name.to_string(), VarInfo { ptr, class_name });
+                hm.insert(
+                    name.to_string(),
+                    VarInfo {
+                        ptr,
+                        class_name,
+                        is_raw_f64,
+                    },
+                );
             }
             None => todo!(),
         }
@@ -939,6 +1023,7 @@ struct ClassInfo<'ctx> {
 pub struct VarInfo<'ctx> {
     pub ptr: PointerValue<'ctx>,
     pub class_name: Option<String>,
+    pub is_raw_f64: bool,
 }
 
 pub struct TypedValue<'ctx> {
