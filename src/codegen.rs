@@ -4,13 +4,22 @@ use std::collections::{HashMap, HashSet};
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::execution_engine::ExecutionEngine;
+use inkwell::llvm_sys::core::LLVMBuildBitCast;
 use inkwell::module::Module;
 use inkwell::types::{BasicMetadataTypeEnum, BasicType, BasicTypeEnum, StructType};
-use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum, FloatValue, PointerValue};
+use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum, FloatValue, IntValue, PointerValue};
 use inkwell::{AddressSpace, FloatPredicate};
 
 use crate::ast::{Expr, Method, Stmt};
 use crate::token::TokenType;
+
+#[repr(u8)]
+enum ValueTag {
+    Number,
+    Bool,
+    Object,
+    Null,
+}
 
 pub struct CodeGen<'ctx> {
     pub context: &'ctx Context,
@@ -20,16 +29,33 @@ pub struct CodeGen<'ctx> {
     pub scopes: Vec<HashMap<String, PointerValue<'ctx>>>,
     //Class
     pub classes: HashMap<String, ClassInfo<'ctx>>,
+    // WrenValue - the 'var' type
+    pub wren_value: StructType<'ctx>,
+
+    // Class instance id
+
+    // maps class name -> id
+    pub class_ids: HashMap<String, u64>,
+    // maps id->class name for reverse lookup
+    pub id_to_class: HashMap<u64, String>,
+    pub next_class_id: u64,
 }
 
 impl<'ctx> CodeGen<'ctx> {
     pub fn new(context: &'ctx Context) -> Self {
+        let i8_type = context.i8_type();
+        let i64_type = context.i64_type();
+
         CodeGen {
             context,
             module: context.create_module("main"),
             builder: context.create_builder(),
             scopes: vec![HashMap::new()],
-            classes: HashMap::<String, ClassInfo<'ctx>>::new(), // execution_engine: todo!(),
+            classes: HashMap::<String, ClassInfo<'ctx>>::new(),
+            wren_value: context.struct_type(&[i8_type.into(), i64_type.into()], false),
+            class_ids: HashMap::<String, u64>::new(),
+            id_to_class: HashMap::<u64, String>::new(),
+            next_class_id: 0, // execution_engine: todo!(),
         }
     }
 
@@ -57,97 +83,151 @@ impl<'ctx> CodeGen<'ctx> {
         }
     }
 
-    pub fn codegen_expr(&mut self, expr: &Expr) -> BasicValueEnum<'ctx> {
+    pub fn codegen_expr(&mut self, expr: &Expr) -> TypedValue<'ctx> {
         match expr {
             Expr::Binary {
                 left,
                 operator,
                 right,
             } => {
-                let l = self.codegen_expr(left).into_float_value();
-                let r = self.codegen_expr(right).into_float_value();
+                let left_val = self.codegen_expr(left);
+                let l = self.unwrap_number(left_val);
+                let right_val = self.codegen_expr(right);
+                let r = self.unwrap_number(right_val);
 
                 match operator.kind {
-                    TokenType::Plus => self.builder.build_float_add(l, r, "addtmp").unwrap().into(),
-                    TokenType::Minus => {
-                        self.builder.build_float_sub(l, r, "subtmp").unwrap().into()
+                    TokenType::Plus => {
+                        self.wrap_number(self.builder.build_float_add(l, r, "addtmp").unwrap())
                     }
-                    TokenType::Star => self.builder.build_float_mul(l, r, "multmp").unwrap().into(),
+                    TokenType::Minus => {
+                        self.wrap_number(self.builder.build_float_sub(l, r, "subtmp").unwrap())
+                    }
+                    TokenType::Star => {
+                        self.wrap_number(self.builder.build_float_mul(l, r, "multmp").unwrap())
+                    }
                     TokenType::Slash => {
-                        self.builder.build_float_div(l, r, "divtmp").unwrap().into()
+                        self.wrap_number(self.builder.build_float_div(l, r, "divtmp").unwrap())
                     }
                     TokenType::Greater => {
                         let val = self
                             .builder
                             .build_float_compare(FloatPredicate::OGT, l, r, "greater")
                             .unwrap();
-                        self.builder
-                            .build_unsigned_int_to_float(val, self.context.f64_type(), "intToFloat")
-                            .unwrap()
-                            .into()
+                        self.wrap_number(
+                            self.builder
+                                .build_unsigned_int_to_float(
+                                    val,
+                                    self.context.f64_type(),
+                                    "intToFloat",
+                                )
+                                .unwrap(),
+                        )
                     }
                     TokenType::GreaterEqual => {
                         let val = self
                             .builder
                             .build_float_compare(FloatPredicate::OGE, l, r, "greaterEq")
                             .unwrap();
-                        self.builder
-                            .build_unsigned_int_to_float(val, self.context.f64_type(), "intToFloat")
-                            .unwrap()
-                            .into()
+                        self.wrap_number(
+                            self.builder
+                                .build_unsigned_int_to_float(
+                                    val,
+                                    self.context.f64_type(),
+                                    "intToFloat",
+                                )
+                                .unwrap(),
+                        )
                     }
                     TokenType::Less => {
                         let val = self
                             .builder
                             .build_float_compare(FloatPredicate::OLT, l, r, "less")
                             .unwrap();
-                        self.builder
-                            .build_unsigned_int_to_float(val, self.context.f64_type(), "intToFloat")
-                            .unwrap()
-                            .into()
+                        self.wrap_number(
+                            self.builder
+                                .build_unsigned_int_to_float(
+                                    val,
+                                    self.context.f64_type(),
+                                    "intToFloat",
+                                )
+                                .unwrap(),
+                        )
                     }
                     TokenType::LessEqual => {
                         let val = self
                             .builder
                             .build_float_compare(FloatPredicate::OLE, l, r, "lessEq")
                             .unwrap();
-                        self.builder
-                            .build_unsigned_int_to_float(val, self.context.f64_type(), "intToFloat")
-                            .unwrap()
-                            .into()
+                        self.wrap_number(
+                            self.builder
+                                .build_unsigned_int_to_float(
+                                    val,
+                                    self.context.f64_type(),
+                                    "intToFloat",
+                                )
+                                .unwrap(),
+                        )
                     }
                     TokenType::EqualEqual => {
                         let val = self
                             .builder
                             .build_float_compare(FloatPredicate::OEQ, l, r, "equal")
                             .unwrap();
-                        self.builder
-                            .build_unsigned_int_to_float(val, self.context.f64_type(), "intToFloat")
-                            .unwrap()
-                            .into()
+                        self.wrap_number(
+                            self.builder
+                                .build_unsigned_int_to_float(
+                                    val,
+                                    self.context.f64_type(),
+                                    "intToFloat",
+                                )
+                                .unwrap(),
+                        )
                     }
                     TokenType::BangEqual => {
                         let val = self
                             .builder
                             .build_float_compare(FloatPredicate::ONE, l, r, "notEqual")
                             .unwrap();
-                        self.builder
-                            .build_unsigned_int_to_float(val, self.context.f64_type(), "intToFloat")
-                            .unwrap()
-                            .into()
+                        self.wrap_number(
+                            self.builder
+                                .build_unsigned_int_to_float(
+                                    val,
+                                    self.context.f64_type(),
+                                    "intToFloat",
+                                )
+                                .unwrap(),
+                        )
                     }
                     _ => todo!(),
                 }
             }
             Expr::Unary { operator, right } => {
-                let val = self.codegen_expr(right).into_float_value();
+                let v = self.codegen_expr(right);
+                let val = self.unwrap_number(v);
                 match operator.kind {
-                    TokenType::Minus => self.builder.build_float_neg(val, "negtmp").unwrap().into(),
+                    TokenType::Minus => {
+                        self.wrap_number(self.builder.build_float_neg(val, "negtmp").unwrap())
+                    }
                     _ => todo!(),
                 }
             }
             Expr::Literal { value } => match value {
-                crate::token::Literal::Number(n) => self.context.f64_type().const_float(*n).into(),
+                crate::token::Literal::Number(n) => {
+                    let f64_const = self.context.f64_type().const_float(*n);
+                    let payload = self
+                        .builder
+                        .build_bit_cast(f64_const, self.context.i64_type(), "casted")
+                        .unwrap();
+                    let tag = self
+                        .context
+                        .i8_type()
+                        .const_int(ValueTag::Number as u64, false);
+                    let struct_wren = self
+                        .wren_value
+                        .const_named_struct(&[tag.into(), payload.into()]);
+
+                    struct_wren.into()
+                }
                 crate::token::Literal::StringLit(_) => todo!(),
             },
             Expr::Grouping { expression } => {
@@ -158,9 +238,8 @@ impl<'ctx> CodeGen<'ctx> {
                 // Stores
                 let p = self.lookup_variable(&name.lexeme);
                 self.builder
-                    .build_load(self.context.f64_type(), p, &name.lexeme)
+                    .build_load(self.wren_value, p, &name.lexeme)
                     .unwrap()
-                    .into_float_value()
                     .into()
             }
             Expr::Assign { name, value } => {
@@ -178,8 +257,8 @@ impl<'ctx> CodeGen<'ctx> {
             } => {
                 // Short circuit ex.
                 // 1 && 0
-
-                let lhs_value = self.codegen_expr(left).into_float_value();
+                let lhs = self.codegen_expr(left);
+                let lhs_value = self.unwrap_number(lhs);
                 let zero = self.context.f64_type().const_float(0.0);
 
                 // Converting to an LLVM bool
@@ -227,7 +306,8 @@ impl<'ctx> CodeGen<'ctx> {
                 self.builder.position_at_end(eval_right_block);
 
                 // RHS
-                let rhs_value = self.codegen_expr(right).into_float_value();
+                let rhs = self.codegen_expr(right);
+                let rhs_value = self.unwrap_number(rhs);
                 let rhs_bool = self
                     .builder
                     .build_float_compare(FloatPredicate::ONE, rhs_value, zero, "right_bool")
@@ -255,14 +335,15 @@ impl<'ctx> CodeGen<'ctx> {
                 ]);
 
                 // Converion to boolean to f64, then return
-                self.builder
-                    .build_unsigned_int_to_float(
-                        phi.as_basic_value().into_int_value(),
-                        self.context.f64_type(),
-                        "bool_to_f64",
-                    )
-                    .unwrap()
-                    .into()
+                self.wrap_number(
+                    self.builder
+                        .build_unsigned_int_to_float(
+                            phi.as_basic_value().into_int_value(),
+                            self.context.f64_type(),
+                            "bool_to_f64",
+                        )
+                        .unwrap(),
+                )
             }
             Expr::Call {
                 receiver,
@@ -286,7 +367,13 @@ impl<'ctx> CodeGen<'ctx> {
                             .build_call(func, &args, "constructor_call")
                             .unwrap();
 
-                        return result.try_as_basic_value().unwrap_basic();
+                        let ptr = result
+                            .try_as_basic_value()
+                            .unwrap_basic()
+                            .into_pointer_value();
+                        let class_id_get = *self.class_ids.get(&class_token.lexeme).unwrap();
+
+                        return self.wrap_object(ptr, class_id_get);
                     }
                 }
 
@@ -300,12 +387,11 @@ impl<'ctx> CodeGen<'ctx> {
     pub fn codegen_stmt(&mut self, stmt: &Stmt) -> Option<FloatValue<'ctx>> {
         match stmt {
             Stmt::Expression { expression } => {
-                Some(self.codegen_expr(expression).into_float_value())
+                let ex = self.codegen_expr(expression);
+                Some(self.unwrap_number(ex))
             }
             Stmt::Var { name, initializer } => {
-                let ptr = self
-                    .builder
-                    .build_alloca(self.context.f64_type(), &name.lexeme);
+                let ptr = self.builder.build_alloca(self.wren_value, &name.lexeme);
 
                 match ptr {
                     Ok(p) => {
@@ -335,7 +421,8 @@ impl<'ctx> CodeGen<'ctx> {
                 then_branch,
                 else_branch,
             } => {
-                let condition_value = self.codegen_expr(condition).into_float_value();
+                let cond_expr = self.codegen_expr(condition);
+                let condition_value = self.unwrap_number(cond_expr);
                 let zero = self.context.f64_type().const_float(0.0);
 
                 let condition_bool = self
@@ -396,7 +483,8 @@ impl<'ctx> CodeGen<'ctx> {
                 self.builder.position_at_end(condition_block);
 
                 // Checking condition
-                let condition_value = self.codegen_expr(condition).into_float_value();
+                let cond_expr = self.codegen_expr(condition);
+                let condition_value = self.unwrap_number(cond_expr);
 
                 let zero = self.context.f64_type().const_float(0.0);
 
@@ -543,6 +631,11 @@ impl<'ctx> CodeGen<'ctx> {
                     field_indices: hash,
                 };
 
+                let mut id = self.next_class_id;
+                self.class_ids.insert(name.lexeme.clone(), id);
+                self.id_to_class.insert(id, name.lexeme.clone());
+                self.next_class_id += 1;
+
                 self.classes.insert(name.lexeme.clone(), info);
 
                 None
@@ -585,6 +678,99 @@ impl<'ctx> CodeGen<'ctx> {
     }
 
     // Helpers
+    fn unwrap_number(&self, value: BasicValueEnum<'ctx>) -> FloatValue<'ctx> {
+        // 1 index is the payload of the wren variable struc
+        let val = self
+            .builder
+            .build_extract_value(value.into_struct_value(), 1, "name")
+            .unwrap();
+        self.builder
+            .build_bit_cast(val, self.context.f64_type(), "unwrapped")
+            .unwrap()
+            .into_float_value()
+    }
+    fn wrap_number(&self, value: FloatValue<'ctx>) -> BasicValueEnum<'ctx> {
+        let payload = self
+            .builder
+            .build_bit_cast(value, self.context.i64_type(), "wrapped")
+            .unwrap();
+
+        let tag = self
+            .context
+            .i8_type()
+            .const_int(ValueTag::Number as u64, false);
+
+        self.wren_value
+            .const_named_struct(&[tag.into(), payload.into()])
+            .into()
+    }
+
+    fn wrap_object(&self, ptr: PointerValue<'ctx>, class_id: u64) -> BasicValueEnum<'ctx> {
+        let i64_value = self
+            .builder
+            .build_ptr_to_int(ptr, self.context.i64_type(), "ptr_to_int")
+            .unwrap();
+
+        let class_id_const = self.context.i64_type().const_int(class_id, false);
+
+        // Using the 48 bits only, so shifting left
+        let shift_amount = self.context.i64_type().const_int(48, false);
+        let shifted_id = self
+            .builder
+            .build_left_shift(class_id_const, shift_amount, "shifted_id")
+            .unwrap();
+
+        let combined = self
+            .builder
+            .build_or(shifted_id, i64_value, "combined")
+            .unwrap();
+
+        let tag = self
+            .context
+            .i8_type()
+            .const_int(ValueTag::Object as u64, false);
+
+        self.wren_value
+            .const_named_struct(&[tag.into(), combined.into()])
+            .into()
+    }
+
+    fn unwrap_object(&self, value: BasicValueEnum<'ctx>) -> (PointerValue<'ctx>, IntValue<'ctx>) {
+        //returns tuple (ptr, class_id)
+        let struct_val = value.into_struct_value();
+        // idx 1 for the payload
+        let payload = self
+            .builder
+            .build_extract_value(struct_val, 1, "payload")
+            .unwrap()
+            .into_int_value();
+
+        let mask = self
+            .context
+            .i64_type()
+            .const_int(0x0000_FFFF_FFFF_FFFF, false);
+
+        // mask off upper 16 bits
+        let ptr_bits = self.builder.build_and(payload, mask, "ptr_bits").unwrap();
+
+        let ptr = self
+            .builder
+            .build_int_to_ptr(
+                ptr_bits,
+                self.context.ptr_type(AddressSpace::default()),
+                "ptr",
+            )
+            .unwrap();
+
+        let shift_amount = self.context.i64_type().const_int(48, false);
+        let class_id_extracted = self
+            .builder
+            .build_right_shift(payload, shift_amount, false, "class_id")
+            .unwrap();
+
+        (ptr, class_id_extracted)
+    }
+
     pub fn collect_fields(constructor: &Option<Method>, methods: &Vec<Method>) -> HashSet<String> {
         let mut hash = HashSet::<String>::new();
 
@@ -708,32 +894,36 @@ impl<'ctx> CodeGen<'ctx> {
 // Block
 impl<'ctx> CodeGen<'ctx> {
     pub fn enter_scope(&mut self) {
-        self.scopes
-            .push(HashMap::<String, PointerValue<'ctx>>::new());
+        self.scopes.push(HashMap::<String, VarInfo<'ctx>>::new());
     }
 
     pub fn exit_scope(&mut self) {
         self.scopes.pop();
     }
 
-    pub fn declare_variable(&mut self, name: &str, ptr: PointerValue<'ctx>) {
+    pub fn declare_variable(
+        &mut self,
+        name: &str,
+        ptr: PointerValue<'ctx>,
+        class_name: Option<String>,
+    ) {
         let top = self.scopes.last_mut();
 
         match top {
             Some(hm) => {
-                hm.insert(name.to_string(), ptr);
+                hm.insert(name.to_string(), VarInfo { ptr, class_name });
             }
             None => todo!(),
         }
     }
 
-    pub fn lookup_variable(&mut self, name: &str) -> PointerValue<'ctx> {
+    pub fn lookup_variable(&mut self, name: &str) -> &VarInfo<'ctx> {
         // Search in "module" in the local scope level space first,
         // then tries to look in global if exist.
         // So, the local shadows the outer scopes.
         for map in self.scopes.iter().rev() {
             if let Some(p) = map.get(name) {
-                return *p;
+                return p;
             }
         }
         todo!()
@@ -744,6 +934,25 @@ impl<'ctx> CodeGen<'ctx> {
 struct ClassInfo<'ctx> {
     struct_type: StructType<'ctx>,
     field_indices: HashMap<String, u32>,
+}
+
+pub struct VarInfo<'ctx> {
+    pub ptr: PointerValue<'ctx>,
+    pub class_name: Option<String>,
+}
+
+pub struct TypedValue<'ctx> {
+    pub value: BasicValueEnum<'ctx>,
+    pub class_name: Option<String>,
+}
+
+impl<'ctx> TypedValue<'ctx> {
+    pub fn plain(value: BasicValueEnum<'ctx>) -> Self {
+        TypedValue {
+            value,
+            class_name: None,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1227,16 +1436,25 @@ mod tests {
     fn test_class_empty_compiles() {
         // Empty class with just constructor
         let ir = compile_code("class Point { construct new() { } }");
-        assert!(ir.contains("Point.new"), "Should generate Point.new function");
+        assert!(
+            ir.contains("Point.new"),
+            "Should generate Point.new function"
+        );
     }
 
     #[test]
     fn test_class_constructor_with_params() {
         // Constructor with parameters
         let ir = compile_code("class Point { construct new(x, y) { _x = x\n_y = y } }");
-        assert!(ir.contains("Point.new"), "Should generate Point.new function");
+        assert!(
+            ir.contains("Point.new"),
+            "Should generate Point.new function"
+        );
         // Check struct has 2 fields (2 doubles)
-        assert!(ir.contains("double") || ir.contains("f64"), "Should have double fields");
+        assert!(
+            ir.contains("double") || ir.contains("f64"),
+            "Should have double fields"
+        );
     }
 
     #[test]
@@ -1255,7 +1473,7 @@ mod tests {
                 construct new(x, y) { _x = x\n_y = y }
                 getX() { return _x }
                 getY() { return _y }
-            }"
+            }",
         );
         assert!(ir.contains("Point.new"), "Should generate constructor");
         assert!(ir.contains("Point.getX"), "Should generate getX");
@@ -1269,7 +1487,7 @@ mod tests {
             "class Calc {
                 construct new() { }
                 add(a, b) { return a + b }
-            }"
+            }",
         );
         assert!(ir.contains("Calc.new"), "Should generate constructor");
         assert!(ir.contains("Calc.add"), "Should generate add method");
@@ -1284,10 +1502,13 @@ mod tests {
                     _x = x
                     _y = y
                 }
-            }"
+            }",
         );
         // Should have getelementptr for field access
-        assert!(ir.contains("getelementptr"), "Should use GEP for field assignment");
+        assert!(
+            ir.contains("getelementptr"),
+            "Should use GEP for field assignment"
+        );
     }
 
     #[test]
@@ -1297,10 +1518,13 @@ mod tests {
             "class Counter {
                 construct new() { _count = 0 }
                 get() { return _count }
-            }"
+            }",
         );
         assert!(ir.contains("Counter.get"), "Should generate get method");
-        assert!(ir.contains("getelementptr"), "Should use GEP to access field");
+        assert!(
+            ir.contains("getelementptr"),
+            "Should use GEP to access field"
+        );
     }
 
     #[test]
@@ -1308,9 +1532,12 @@ mod tests {
         // Calling a constructor generates a call instruction
         let ir = compile_code(
             "class Point { construct new(x, y) { _x = x\n_y = y } }
-            Point.new(1, 2)"
+            Point.new(1, 2)",
         );
-        assert!(ir.contains("call"), "Should generate call instruction for Point.new");
+        assert!(
+            ir.contains("call"),
+            "Should generate call instruction for Point.new"
+        );
     }
 
     #[test]
@@ -1318,9 +1545,15 @@ mod tests {
         // Multiple class definitions
         let ir = compile_code(
             "class Point { construct new(x) { _x = x } }
-            class Circle { construct new(r) { _r = r } }"
+            class Circle { construct new(r) { _r = r } }",
         );
-        assert!(ir.contains("Point.new"), "Should generate Point constructor");
-        assert!(ir.contains("Circle.new"), "Should generate Circle constructor");
+        assert!(
+            ir.contains("Point.new"),
+            "Should generate Point constructor"
+        );
+        assert!(
+            ir.contains("Circle.new"),
+            "Should generate Circle constructor"
+        );
     }
 }
